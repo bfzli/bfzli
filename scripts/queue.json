@@ -2,20 +2,6 @@
     "generatedAt": "2026-10-18T21:59:47.002Z",
     "ideas": [
         {
-            "cell": "hydration-mismatch-classnames::nextjs::css-module-order",
-            "title": "Next.js Hydration Mismatch: CSS Module Class Names Render Differently on Server and Client",
-            "description": "Fix hydration errors caused by mismatched CSS Module class names between server-rendered HTML and client hydration.",
-            "tags": [
-                "nextjs",
-                "react",
-                "hydration",
-                "css-modules",
-                "ssr"
-            ],
-            "angle": "Open with the exact hydration warning and the differing class attribute values. Explain how inconsistent module resolution, conditional rendering, or environment-specific imports can change generated class names between server and client. Show how to stabilize the markup and verify the rendered output matches before hydration.",
-            "slug": "next-js-hydration-mismatch-css-module-class-names-render-differently-on-server-and-client"
-        },
-        {
             "cell": "metro-requires-asset-outside-root::react-native::static-image-import",
             "title": "React Native Metro Rejects an Image Import with \"Requiring unknown module\" for a File Outside the Project Root",
             "description": "Explain why Metro fails on image imports that resolve outside the bundle root and how to restructure or alias the asset path.",
@@ -130,18 +116,19 @@
     ],
     "drafted": [
         {
-            "cell": "asset-origin-path::astro::static-production",
-            "title": "Astro Serves Broken Images After Deployment Because the Asset Path Points at the Wrong Origin",
-            "description": "Fix deployed Astro pages that load HTML but 404 their CSS, JS, or image assets from an incorrect public path.",
+            "cell": "hydration-mismatch-classnames::nextjs::css-module-order",
+            "title": "Next.js Hydration Mismatch: CSS Module Class Names Render Differently on Server and Client",
+            "description": "Fix hydration errors caused by mismatched CSS Module class names between server-rendered HTML and client hydration.",
             "tags": [
-                "astro",
-                "assets",
-                "deployment",
-                "static-site"
+                "nextjs",
+                "react",
+                "hydration",
+                "css-modules",
+                "ssr"
             ],
-            "angle": "Explain how Astro computes asset URLs from `site`, `base`, and the hosting path. Show how to set the correct origin and base path for the target host, and how to verify emitted links and rewritten references in the built output.",
-            "slug": "astro-serves-broken-images-after-deployment-because-the-asset-path-points-at-the-wrong-origin",
-            "draftedAt": "2026-10-15T00:13:02.834Z"
+            "angle": "Open with the exact hydration warning and the differing class attribute values. Explain how inconsistent module resolution, conditional rendering, or environment-specific imports can change generated class names between server and client. Show how to stabilize the markup and verify the rendered output matches before hydration.",
+            "slug": "next-js-hydration-mismatch-css-module-class-names-render-differently-on-server-and-client",
+            "draftedAt": "2026-10-18T23:49:58.828Z"
         }
     ]
 }
