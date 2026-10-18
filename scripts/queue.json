@@ -1,6 +1,133 @@
 {
-    "generatedAt": "2026-10-11T23:17:01.090Z",
-    "ideas": [],
+    "generatedAt": "2026-10-18T21:59:47.002Z",
+    "ideas": [
+        {
+            "cell": "hydration-mismatch-classnames::nextjs::css-module-order",
+            "title": "Next.js Hydration Mismatch: CSS Module Class Names Render Differently on Server and Client",
+            "description": "Fix hydration errors caused by mismatched CSS Module class names between server-rendered HTML and client hydration.",
+            "tags": [
+                "nextjs",
+                "react",
+                "hydration",
+                "css-modules",
+                "ssr"
+            ],
+            "angle": "Open with the exact hydration warning and the differing class attribute values. Explain how inconsistent module resolution, conditional rendering, or environment-specific imports can change generated class names between server and client. Show how to stabilize the markup and verify the rendered output matches before hydration.",
+            "slug": "next-js-hydration-mismatch-css-module-class-names-render-differently-on-server-and-client"
+        },
+        {
+            "cell": "metro-requires-asset-outside-root::react-native::static-image-import",
+            "title": "React Native Metro Rejects an Image Import with \"Requiring unknown module\" for a File Outside the Project Root",
+            "description": "Explain why Metro fails on image imports that resolve outside the bundle root and how to restructure or alias the asset path.",
+            "tags": [
+                "react-native",
+                "metro",
+                "bundler",
+                "assets",
+                "javascript"
+            ],
+            "angle": "Start with the Metro error text and the exact import path that fails. Explain Metro's file-watching and project-root restrictions, then show how symlinks, monorepo layout, or bad relative paths cause the resolver to reject the asset. Include the supported fixes: move the file under the root, adjust watch folders, or reference the asset through a path Metro can package.",
+            "slug": "react-native-metro-rejects-an-image-import-with-requiring-unknown-module-for-a-file-outside-the-project-root"
+        },
+        {
+            "cell": "router-mounted-too-late::express::async-route-registration",
+            "title": "Express Leaves `/api/users` Unreachable When the Router Mounts After the Catch-All",
+            "description": "Show why a later catch-all route shadows mounted Express routers and how to order middleware so nested routes resolve correctly.",
+            "tags": [
+                "express",
+                "routing",
+                "middleware",
+                "nodejs",
+                "http"
+            ],
+            "angle": "Open with the 404 or HTML fallback that appears on `/api/users` instead of the route handler. Explain Express's first-match routing model and how a catch-all `app.get('*')` or static middleware can consume requests before the router is mounted. Show the correct middleware order and how to confirm the route stack with `app._router.stack` or logging.",
+            "slug": "express-leaves-api-users-unreachable-when-the-router-mounts-after-the-catch-all"
+        },
+        {
+            "cell": "remix-form-action-wrong-route::remix::nested-form-post",
+            "title": "Remix Sends a Form Submission to the Wrong Route Because the `action` Path Is Relative",
+            "description": "Fix Remix forms that post to an unexpected sibling route when a relative action path resolves against the current URL.",
+            "tags": [
+                "remix",
+                "forms",
+                "routing",
+                "action",
+                "javascript"
+            ],
+            "angle": "Open with the exact route that receives the POST and the route that was intended. Explain how Remix resolves relative `action` values against the current location, not the route module you meant, and why nested segments make that easy to miss. Show the explicit paths or route-relative patterns that send the submission to the correct action.",
+            "slug": "remix-sends-a-form-submission-to-the-wrong-route-because-the-action-path-is-relative"
+        },
+        {
+            "cell": "electron-preload-contextbridge-missing::electron::context-isolation",
+            "title": "Electron Fails with `ipcRenderer is undefined` When the Preload Bridge Is Not Exposed Through `contextBridge`",
+            "description": "Explain why a renderer cannot see `ipcRenderer` under context isolation and how to expose only the API you need.",
+            "tags": [
+                "electron",
+                "ipc",
+                "preload",
+                "contextbridge",
+                "security"
+            ],
+            "angle": "Open with the renderer-side `ipcRenderer is undefined` error and the preload script setup. Explain how `contextIsolation: true` keeps Node APIs out of the page context and why assigning globals in preload does not bridge them. Show the `contextBridge.exposeInMainWorld` pattern and the matching renderer call site.",
+            "slug": "electron-fails-with-ipcrenderer-is-undefined-when-the-preload-bridge-is-not-exposed-through-contextbridge"
+        },
+        {
+            "cell": "turborepo-deadlock-infinite-rebuild::turbo::watch-loop",
+            "title": "Turborepo Keeps Rebuilding the Same Package Because a Task Writes Into Its Own Input Directory",
+            "description": "Stop a watch loop caused by generated files landing inside a task's watched inputs and triggering endless rebuilds.",
+            "tags": [
+                "turborepo",
+                "monorepo",
+                "watch",
+                "build",
+                "filesystem"
+            ],
+            "angle": "Open with the repeated rebuild symptom and the task that never settles. Explain how Turborepo hashes inputs and how writing build output into a watched source directory causes the file change to re-trigger the same task. Show how to move artifacts to a separate output folder, exclude generated paths, or adjust task configuration.",
+            "slug": "turborepo-keeps-rebuilding-the-same-package-because-a-task-writes-into-its-own-input-directory"
+        },
+        {
+            "cell": "vercel-env-build-time-undefined::vercel::edge-vs-runtime",
+            "title": "Vercel Builds a Next.js App with `process.env` Undefined in Client Code",
+            "description": "Show why browser bundles cannot read server-only env vars and how to separate build-time, server, and client values.",
+            "tags": [
+                "vercel",
+                "nextjs",
+                "environment-variables",
+                "build",
+                "client"
+            ],
+            "angle": "Open with the exact undefined value in the browser bundle or shipped code. Explain the difference between variables embedded at build time, runtime server variables, and `NEXT_PUBLIC_` values that are intentionally exposed to the client. Show how to move server-only reads out of client code and how to verify what ends up in the bundle.",
+            "slug": "vercel-builds-a-next-js-app-with-process-env-undefined-in-client-code"
+        },
+        {
+            "cell": "eslint-flat-config-parser-mismatch::eslint::typescript-project",
+            "title": "ESLint Fails with `Parsing error: Cannot read file tsconfig.json` After Switching to Flat Config",
+            "description": "Explain why ESLint can no longer find the TypeScript project file and how to point the parser at the right path.",
+            "tags": [
+                "eslint",
+                "typescript",
+                "flat-config",
+                "parser",
+                "lint"
+            ],
+            "angle": "Open with the parser error and the config file path ESLint is trying to read. Explain how flat config changes resolution rules, so `parserOptions.project` no longer behaves like it did in legacy config setups. Show the corrected absolute or relative paths, the working `tsconfigRootDir`, and how to avoid loading the wrong project file in a monorepo.",
+            "slug": "eslint-fails-with-parsing-error-cannot-read-file-tsconfig-json-after-switching-to-flat-config"
+        },
+        {
+            "cell": "cloudflare-workers-stream-consumed::cloudflare-workers::request-body-clone",
+            "title": "Cloudflare Workers Reject a Second Read with `TypeError: body used already` After `request.text()`",
+            "description": "Fix Workers handlers that consume a request body twice and learn when to clone or cache the parsed data.",
+            "tags": [
+                "cloudflare-workers",
+                "fetch",
+                "request-body",
+                "javascript",
+                "edge"
+            ],
+            "angle": "Open with the exact `body used already` error and the second read that triggers it. Explain the Fetch request stream model: once a body is consumed, it cannot be read again unless you clone the request or preserve the parsed result. Show how to structure middleware and validation so the body is read once and reused safely.",
+            "slug": "cloudflare-workers-reject-a-second-read-with-typeerror-body-used-already-after-request-text"
+        }
+    ],
     "drafted": [
         {
             "cell": "asset-origin-path::astro::static-production",
