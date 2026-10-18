@@ -1,0 +1,392 @@
+---
+title: "Next.js Hydration Mismatch: CSS Module Class Names Render Differently on Server and Client"
+description: "Fix hydration errors caused by mismatched CSS Module class names between server-rendered HTML and client hydration."
+tags: ["nextjs", "react", "hydration", "css-modules", "ssr"]
+date: Oct 19, 2026
+cell: "hydration-mismatch-classnames::nextjs::css-module-order"
+---
+
+Hydration failed because the server rendered HTML and the client rendered HTML do not match. The warning often includes a class attribute mismatch such as `Warning: Prop className did not match. Server: "Button_button__a1b2c" Client: "Button_button__d4e5f"` or `Error: Hydration failed because the initial UI does not match what was rendered on the server.` The breakage is in the markup produced for a CSS Module class name, usually on a component rendered by Next.js during server-side rendering and then re-rendered during client hydration.
+
+## What the warning means
+
+In Next.js, the server renders HTML first. Then the client loads JavaScript, React hydrates the existing DOM, and compares what the client render would produce against what is already in the page.
+
+If a component produces different `className` values between server and client, React sees different markup. A CSS Module class name mismatch is a common cause because the generated token is derived from the module path, the build, and the import graph. When the class token differs, hydration can fail even if the component tree looks otherwise identical.
+
+A typical warning looks like this:
+
+```text
+Warning: Prop `className` did not match. Server: "Card_card__1x2y3" Client: "Card_card__9z8w7"
+```
+
+This means the server sent HTML with one CSS Module hash, but the client rendered a different hash for the same `className` prop.
+
+## How CSS Modules generate class names
+
+A CSS Module import such as `import styles from './Card.module.css'` does not return the literal CSS selector names. It returns an object whose values are generated class tokens.
+
+For example:
+
+```tsx
+import styles from './Card.module.css'
+
+export function Card() {
+  return <div className={styles.card}>Content</div>
+}
+```
+
+The browser does not see `card`. It sees something like `Card_card__1x2y3`.
+
+That token must be identical on the server and client. If it is not, React hydration compares different strings and reports a mismatch.
+
+With Next.js, this is normally stable. Problems appear when the server and client do not resolve the same file, do not evaluate the same code path, or build the module graph differently.
+
+## Why the server and client can diverge
+
+### Inconsistent module resolution
+
+If the server bundle and client bundle resolve different files for the same import, the generated CSS Module name can change. Common causes include:
+
+- path aliases that resolve differently in `tsconfig.json` and `next.config.js`
+- barrel files that re-export different implementations
+- platform-specific files such as `Button.server.tsx` and `Button.client.tsx`
+- different casing in imports on case-sensitive file systems
+
+A mismatch can happen if one side imports `./Card.module.css` and the other side indirectly imports a different stylesheet or a different copy of the same stylesheet.
+
+Keep imports explicit and consistent. Avoid relying on ambiguous re-exports for styles.
+
+### Conditional rendering that changes the element tree
+
+Hydration requires the first client render to match the HTML already in the document. If a CSS Module class is applied in one render path but not another, the result can differ.
+
+This is especially common when the render path depends on client-only state such as `window`, `localStorage`, `matchMedia`, or `useEffect`-initialized values.
+
+Bad pattern:
+
+```tsx
+'use client'
+
+import { useState, useEffect } from 'react'
+import styles from './Nav.module.css'
+
+export function Nav() {
+  const [isCompact, setIsCompact] = useState(false)
+
+  useEffect(() => {
+    setIsCompact(window.innerWidth < 768)
+  }, [])
+
+  return (
+    <nav className={isCompact ? styles.compact : styles.full}>
+      Links
+    </nav>
+  )
+}
+```
+
+The server render uses `styles.full`. The client’s initial render also uses `styles.full`, so this specific example is safe for hydration. But if the value were derived during render from `window.innerWidth`, the server would never be able to compute it, and the client could render a different class immediately.
+
+Unsafe pattern:
+
+```tsx
+'use client'
+
+import styles from './Nav.module.css'
+
+export function Nav() {
+  const isCompact = window.innerWidth < 768
+
+  return (
+    <nav className={isCompact ? styles.compact : styles.full}>
+      Links
+    </nav>
+  )
+}
+```
+
+This breaks because `window` is unavailable during server render, and the client can render a different branch.
+
+### Environment-specific imports
+
+Imports that differ between Node.js and the browser can change the render output. Examples include:
+
+- importing code that checks `process.env.NEXT_RUNTIME`
+- using browser-only APIs during render
+- conditionally loading a component with `next/dynamic` and `ssr: false`
+- importing a CSS Module from a file that is conditionally included in one environment
+
+If the client and server load different code, the generated markup can differ. The class name itself may be stable in one module, but the rendered element that uses it may not be.
+
+## How to reproduce the failure pattern
+
+A minimal mismatch usually looks like a component rendering one class on the server and another on the client.
+
+```tsx
+'use client'
+
+import styles from './Banner.module.css'
+
+export function Banner() {
+  const variant = typeof window === 'undefined' ? 'server' : 'client'
+
+  return (
+    <div className={variant === 'server' ? styles.server : styles.client}>
+      Banner
+    </div>
+  )
+}
+```
+
+If `styles.server` and `styles.client` resolve to different generated tokens, React will compare the server output against the client render and report a mismatch.
+
+A more realistic variant is a theme switch or responsive layout that reads browser state before hydration:
+
+```tsx
+'use client'
+
+import { useMemo } from 'react'
+import styles from './Banner.module.css'
+
+export function Banner() {
+  const theme = useMemo(() => {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  }, [])
+
+  return (
+    <div className={theme === 'dark' ? styles.dark : styles.light}>
+      Banner
+    </div>
+  )
+}
+```
+
+This is not safe for hydration because `useMemo` runs during render, and `window` does not exist during server rendering. The initial markup can differ.
+
+## Stabilize the rendered markup
+
+The goal is simple: the first server render and the first client render must produce identical element structure and identical `className` values.
+
+### Keep render-time logic deterministic
+
+Any value used to choose a CSS Module class during render should come from props, static data, or server-computed state that is serialized into the HTML.
+
+Preferred pattern:
+
+```tsx
+import styles from './Banner.module.css'
+
+type BannerProps = {
+  variant: 'server' | 'client'
+}
+
+export function Banner({ variant }: BannerProps) {
+  return (
+    <div className={variant === 'server' ? styles.server : styles.client}>
+      Banner
+    </div>
+  )
+}
+```
+
+Then compute `variant` on the server and pass the same value to the client through props.
+
+In the Next.js App Router, you can pass server-derived values through a server component:
+
+```tsx
+import { Banner } from './Banner'
+
+export default async function Page() {
+  const variant = 'server'
+
+  return <Banner variant={variant} />
+}
+```
+
+The important part is that the client sees the same `variant` on hydration.
+
+### Defer browser-only logic until after hydration
+
+If a class depends on browser APIs, move that logic into `useEffect` and render a stable placeholder first.
+
+```tsx
+'use client'
+
+import { useEffect, useState } from 'react'
+import styles from './Nav.module.css'
+
+export function Nav() {
+  const [isCompact, setIsCompact] = useState(false)
+
+  useEffect(() => {
+    const update = () => setIsCompact(window.innerWidth < 768)
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
+  return (
+    <nav className={isCompact ? styles.compact : styles.full}>
+      Links
+    </nav>
+  )
+}
+```
+
+Here the server and client both render `styles.full` initially. After hydration, the effect updates the class if needed. The markup matches during hydration, so React does not warn.
+
+### Avoid importing different modules for the same component
+
+Do not route styles through environment-specific file names unless both environments resolve to identical class output.
+
+Instead of this:
+
+```tsx
+import styles from './Button.client.module.css'
+```
+
+and on the server:
+
+```tsx
+import styles from './Button.server.module.css'
+```
+
+prefer a single shared module:
+
+```tsx
+import styles from './Button.module.css'
+```
+
+If different visual behavior is needed, vary the data, not the stylesheet import path.
+
+### Keep component trees identical
+
+A class mismatch can be a symptom of a larger structural mismatch. If the server renders `<div className={...}>` and the client renders `<span className={...}>`, hydration will fail even if the class tokens are otherwise correct.
+
+Use the same wrapper element on both sides. If the content changes, change only the content, not the node shape.
+
+## Verify the rendered output before hydration
+
+The fastest way to catch this class of bug is to inspect the server HTML and the first client render.
+
+### Check the server HTML
+
+Run the app and inspect the page source, not just the live DOM. In Next.js, the server-rendered HTML is what the browser receives before hydration.
+
+You can also use `curl` against the page and inspect the `class` attribute:
+
+```bash
+curl -s http://localhost:3000 | grep -o 'class="[^"]*"'
+```
+
+This shows the class names in the HTML sent by the server.
+
+### Compare against the client render
+
+Use React DevTools or the browser console to inspect the hydrated DOM. If the live DOM class differs from the HTML source before hydration, the render path is not stable.
+
+A useful debugging technique is to log the exact values that decide the class, but only from deterministic sources. For example:
+
+```tsx
+import styles from './Card.module.css'
+
+export function Card({ selected }: { selected: boolean }) {
+  const className = selected ? styles.selected : styles.base
+  console.log({ selected, className })
+  return <div className={className}>Card</div>
+}
+```
+
+If the logged `className` differs between server and client for the initial render, the markup is not stable.
+
+### Use an integration test
+
+A Playwright test can assert that the initial rendered HTML contains the same expected class and that hydration does not emit warnings.
+
+```ts
+import { test, expect } from '@playwright/test'
+
+test('page hydrates without className mismatch', async ({ page }) => {
+  const messages: string[] = []
+
+  page.on('console', msg => {
+    messages.push(msg.text())
+  })
+
+  await page.goto('http://localhost:3000')
+
+  await expect(page.locator('[data-testid="banner"]')).toHaveClass(/Banner_/)
+
+  expect(messages.some(text => text.includes('did not match'))).toBe(false)
+})
+```
+
+If the page emits a hydration warning, the test fails. This is more reliable than checking a screenshot because hydration bugs can be intermittent when a conditional branch depends on runtime state.
+
+## Next.js-specific checks
+
+### Make sure App Router and Client Components are used correctly
+
+In the App Router, files without `use client` are server components. They can import CSS Modules and render stable markup, but they cannot use browser APIs during render.
+
+Client components can use browser APIs, but they still need to render the same first-pass markup as the server output.
+
+If a component needs browser-only state, put the stateful part in a child client component and keep the outer markup stable.
+
+### Check `next.config.js` and tooling
+
+CSS Modules rely on the Next.js build pipeline. Custom Webpack or PostCSS changes can affect module handling if they alter how files are transformed between environments.
+
+Make sure the project uses the same Next.js version on both server and client bundles. With a recent stable release, the setup should look like this:
+
+```json
+{
+  "dependencies": {
+    "next": "15.1.6",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  }
+}
+```
+
+If a monorepo or custom build step produces multiple copies of a CSS module file, deduplicate the import path. A single source of truth prevents different hashed outputs from different resolver paths.
+
+### Avoid non-deterministic class composition
+
+If you use utilities like `clsx` or `classnames`, keep the inputs deterministic during the first render.
+
+```tsx
+import clsx from 'clsx'
+import styles from './Button.module.css'
+
+type ButtonProps = {
+  primary: boolean
+  disabled: boolean
+}
+
+export function Button({ primary, disabled }: ButtonProps) {
+  return (
+    <button
+      className={clsx(
+        styles.root,
+        primary && styles.primary,
+        disabled && styles.disabled
+      )}
+      disabled={disabled}
+    >
+      Save
+    </button>
+  )
+}
+```
+
+This is safe because the class composition depends only on props. It is unsafe if any input depends on `Date.now()`, `Math.random()`, `window`, `document`, or values read after mount.
+
+## Practical fix order
+
+Start by identifying which value changes between the server render and the client render. If the class is chosen from browser-only state, move that state into `useEffect` or server props. If the class token itself differs across bundles, inspect imports and module resolution so both environments import the same stylesheet file.
+
+Prefer deterministic render logic over client-only branching. Prefer one shared CSS Module over environment-specific stylesheet paths. Prefer verifying the server HTML and first client render in a test over relying on a manual browser check.
+
+The stable fix is the one that makes the server and client produce the same initial markup. That is what prevents `className` hydration warnings from coming back.
