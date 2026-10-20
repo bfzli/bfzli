@@ -1,0 +1,324 @@
+---
+title: "React Native Metro Rejects an Image Import with \"Requiring unknown module\" for a File Outside the Project Root"
+description: "Explain why Metro fails on image imports that resolve outside the bundle root and how to restructure or alias the asset path."
+tags: ["react-native", "metro", "bundler", "assets", "javascript"]
+date: Oct 20, 2026
+cell: "metro-requires-asset-outside-root::react-native::static-image-import"
+---
+
+`Requiring unknown module "../shared/assets/logo.png"` fails in Metro bundler with the error `Unable to resolve module ../shared/assets/logo.png from App.tsx: None of these files exist:` when the import resolves to a file outside the project root that Metro is allowed to watch and package.
+
+## What Metro is rejecting
+
+Metro does not bundle arbitrary filesystem paths. It resolves every `import` and `require` against the project graph, then checks whether the target file is inside a root it knows how to watch and package. If an image import points outside that boundary, Metro rejects it before asset processing runs.
+
+A typical failing import looks like this:
+
+```ts
+import logo from '../shared/assets/logo.png';
+```
+
+If `App.tsx` lives in `apps/mobile/src/App.tsx` and `../shared/assets/logo.png` resolves to `apps/shared/assets/logo.png`, Metro may fail with:
+
+```text
+Unable to resolve module ../shared/assets/logo.png from apps/mobile/src/App.tsx:
+
+None of these files exist:
+  * apps/shared/assets/logo.png
+  * apps/shared/assets/logo.png.png
+  * apps/shared/assets/logo.png.js
+  * apps/shared/assets/logo.png.json
+```
+
+If the file exists on disk but is outside the Metro root, the message can also surface as:
+
+```text
+Requiring unknown module "../shared/assets/logo.png"
+```
+
+The important part is that the import path resolves to a location Metro has not been configured to include.
+
+## Why image imports are handled differently
+
+React Native treats static image imports as assets. Metro does not read the image directly from disk at render time. It resolves the path during bundling, records the file in the dependency graph, and emits an asset reference that `Image` can consume.
+
+That means the image must satisfy the same resolver rules as code modules:
+
+- it must be reachable from the bundle graph
+- it must be inside an allowed root
+- it must be visible to Metro’s file watcher
+- it must not be hidden behind unsupported filesystem indirection
+
+If the path resolves outside those rules, Metro cannot guarantee that changes to the file will be observed or that the asset can be packaged consistently for iOS and Android.
+
+## How Metro’s root and watcher restrictions work
+
+Metro uses a project root, plus optional extra watched folders, to build a file map. Files outside those watched directories are not part of the graph unless you explicitly add them.
+
+The two relevant settings are:
+
+- `projectRoot`
+- `watchFolders`
+
+A minimal `metro.config.js` often looks like this:
+
+```js
+const { getDefaultConfig } = require('@react-native/metro-config');
+
+module.exports = (async () => {
+  const config = await getDefaultConfig(__dirname);
+
+  return {
+    ...config,
+    projectRoot: __dirname,
+  };
+})();
+```
+
+With that configuration, Metro watches the app directory only. A file under `../shared/assets/logo.png` is outside the root if `shared` is a sibling of the app directory.
+
+Metro also resolves symlinks in a way that can expose paths outside the root. If the import target is a symlink into another workspace package, Metro may follow the real path, then reject it because the real path is outside `projectRoot` and not in `watchFolders`.
+
+## Common ways this happens
+
+### Relative imports that escape the app directory
+
+A file like this is the simplest trigger:
+
+```ts
+import icon from '../../../packages/ui/src/assets/icon.png';
+```
+
+The path may work in TypeScript and in the editor, because the filesystem allows it. Metro still rejects it if the resolved file is outside the configured roots.
+
+### Monorepo layouts
+
+In a monorepo, the mobile app often sits beside shared packages:
+
+```text
+repo/
+  apps/
+    mobile/
+      src/
+      metro.config.js
+  packages/
+    ui/
+      src/
+        assets/
+          logo.png
+```
+
+A direct import from `apps/mobile` to `packages/ui/src/assets/logo.png` can fail unless `packages/ui` is added to `watchFolders` and the bundler is configured for the monorepo layout.
+
+### Symlinked dependencies
+
+Package managers such as `pnpm` and workspace tools commonly create symlinks. The source file may appear to live under `node_modules`, but the symlink target is elsewhere on disk. Metro resolves the real path and may reject it if it lands outside the allowed roots.
+
+### Bad asset aliases
+
+A TypeScript alias such as `@shared/*` can make the import look valid:
+
+```ts
+import logo from '@shared/assets/logo.png';
+```
+
+TypeScript may resolve this path for type checking, but Metro does not use `tsconfig.json` path aliases unless the bundler is configured with matching resolver logic. If the alias points outside the root, the same file-watching restriction applies.
+
+## Supported fix 1: move the asset under the Metro root
+
+The simplest fix is to place the image inside the app’s bundle root. For example:
+
+```text
+apps/mobile/
+  assets/
+    logo.png
+  src/
+    App.tsx
+```
+
+Then import it with a path that stays inside the root:
+
+```ts
+import logo from '../assets/logo.png';
+
+export function App() {
+  return <Image source={logo} />;
+}
+```
+
+This works because Metro can see the file, track changes, and package the asset without needing extra workspace configuration.
+
+Prefer this when the asset is app-specific. It keeps bundling straightforward and avoids coupling the mobile app to another package’s private filesystem layout.
+
+## Supported fix 2: add the external directory to `watchFolders`
+
+If the asset must live outside the app directory, configure Metro to watch the shared location.
+
+Example `metro.config.js` for a monorepo:
+
+```js
+const path = require('path');
+const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
+
+const projectRoot = __dirname;
+const workspaceRoot = path.resolve(projectRoot, '../..');
+
+module.exports = mergeConfig(getDefaultConfig(projectRoot), {
+  projectRoot,
+  watchFolders: [
+    path.resolve(workspaceRoot, 'packages'),
+  ],
+});
+```
+
+If the image is in `packages/ui/src/assets/logo.png`, Metro can now watch that directory and include it in the graph.
+
+For this to work reliably, the rest of the monorepo also needs to be compatible with Metro’s resolver. In practice, that often means ensuring shared packages are treated as source, not as opaque installed dependencies, and that duplicate React Native copies are avoided.
+
+After changing Metro config, restart the bundler with cache reset:
+
+```sh
+npx react-native start --reset-cache
+```
+
+If the app uses `expo start`, use:
+
+```sh
+npx expo start -c
+```
+
+A stale Metro cache can keep the old root restrictions in memory.
+
+## Supported fix 3: reference the asset through a path Metro can package
+
+If the asset belongs to a shared package, expose it through a package entry that Metro can resolve cleanly rather than importing a deep filesystem path.
+
+For example, in a shared package:
+
+```text
+packages/ui/
+  src/
+    assets/
+      logo.png
+    index.ts
+```
+
+Export an asset path from the package entry:
+
+```ts
+// packages/ui/src/index.ts
+export const uiAssets = {
+  logo: require('./assets/logo.png'),
+} as const;
+```
+
+Then consume it from the app through the package entry point:
+
+```ts
+import { uiAssets } from '@acme/ui';
+
+export function Header() {
+  return <Image source={uiAssets.logo} />;
+}
+```
+
+This only works if Metro can resolve `@acme/ui` and watch the package root. The key difference is that the app no longer imports an arbitrary relative path into another directory. The package controls its own asset surface.
+
+If the package is published or linked, make sure its `package.json` points to the source or build output that Metro can see, and that the asset files are present in that location.
+
+## What not to rely on
+
+### TypeScript path aliases alone
+
+`tsconfig.json` path mapping does not configure Metro. This compiles:
+
+```json
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["../shared/*"]
+    }
+  }
+}
+```
+
+But Metro still needs matching resolver support. Without it, the app may type-check and still fail at runtime.
+
+### Symlink behavior that works only on one machine
+
+A symlink can make the import path look valid on one filesystem and fail on another. Metro resolves real paths during bundling, so symlink tricks are fragile unless the workspace is configured explicitly.
+
+### Importing from arbitrary build output
+
+An image under `dist/` or `build/` may disappear or move when the package is rebuilt. If Metro watches source files, prefer importing the source asset from a watched package root instead of a generated directory that may not be stable.
+
+## How to verify the fix
+
+Check the resolved path first:
+
+```sh
+node -e "const path=require('path'); console.log(path.resolve('apps/mobile/src', '../shared/assets/logo.png'))"
+```
+
+If the path leaves the app root, Metro will need extra configuration or a different file location.
+
+Then inspect Metro config and confirm the directory is included in `watchFolders`.
+
+You can also ask Metro to print the bundle graph behavior by starting with verbose logs:
+
+```sh
+npx react-native start --reset-cache --verbose
+```
+
+If the asset is still rejected, the error usually means one of these remains true:
+
+- the file is still outside `projectRoot` and `watchFolders`
+- the import path points to a symlink target outside the watched tree
+- the import path is wrong, so Metro is searching for a file that does not exist
+- the package is not exposed through a resolvable entry point
+
+## Recommended structure for monorepos
+
+A stable layout keeps app-local assets inside the app, and shared UI packages expose only assets that Metro can watch directly.
+
+Example:
+
+```text
+repo/
+  apps/
+    mobile/
+      assets/
+      src/
+      metro.config.js
+  packages/
+    ui/
+      src/
+        assets/
+        index.ts
+```
+
+A workable `metro.config.js` then includes the package directory:
+
+```js
+const path = require('path');
+const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
+
+const projectRoot = __dirname;
+const workspaceRoot = path.resolve(projectRoot, '../..');
+
+module.exports = mergeConfig(getDefaultConfig(projectRoot), {
+  projectRoot,
+  watchFolders: [path.resolve(workspaceRoot, 'packages')],
+});
+```
+
+This avoids ad hoc relative paths that jump across the repository boundary.
+
+## Practical takeaway
+
+Prefer moving the image under the app’s Metro root when the asset is app-specific. That is the least error-prone fix because Metro can watch, resolve, and package it without extra workspace rules.
+
+Use `watchFolders` only when the image truly belongs in a shared package or monorepo source tree. If a package owns the asset, reference it through a package entry that Metro can resolve, not through a deep relative path that escapes the bundle root.
+
+To keep the problem from coming back, treat Metro’s watched roots as the boundary for static assets. If a file import crosses that boundary, either bring the file inside it or explicitly extend Metro’s configuration to include the directory.
