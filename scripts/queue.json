@@ -2,20 +2,6 @@
     "generatedAt": "2026-10-18T21:59:47.002Z",
     "ideas": [
         {
-            "cell": "metro-requires-asset-outside-root::react-native::static-image-import",
-            "title": "React Native Metro Rejects an Image Import with \"Requiring unknown module\" for a File Outside the Project Root",
-            "description": "Explain why Metro fails on image imports that resolve outside the bundle root and how to restructure or alias the asset path.",
-            "tags": [
-                "react-native",
-                "metro",
-                "bundler",
-                "assets",
-                "javascript"
-            ],
-            "angle": "Start with the Metro error text and the exact import path that fails. Explain Metro's file-watching and project-root restrictions, then show how symlinks, monorepo layout, or bad relative paths cause the resolver to reject the asset. Include the supported fixes: move the file under the root, adjust watch folders, or reference the asset through a path Metro can package.",
-            "slug": "react-native-metro-rejects-an-image-import-with-requiring-unknown-module-for-a-file-outside-the-project-root"
-        },
-        {
             "cell": "router-mounted-too-late::express::async-route-registration",
             "title": "Express Leaves `/api/users` Unreachable When the Router Mounts After the Catch-All",
             "description": "Show why a later catch-all route shadows mounted Express routers and how to order middleware so nested routes resolve correctly.",
@@ -116,19 +102,19 @@
     ],
     "drafted": [
         {
-            "cell": "hydration-mismatch-classnames::nextjs::css-module-order",
-            "title": "Next.js Hydration Mismatch: CSS Module Class Names Render Differently on Server and Client",
-            "description": "Fix hydration errors caused by mismatched CSS Module class names between server-rendered HTML and client hydration.",
+            "cell": "metro-requires-asset-outside-root::react-native::static-image-import",
+            "title": "React Native Metro Rejects an Image Import with \"Requiring unknown module\" for a File Outside the Project Root",
+            "description": "Explain why Metro fails on image imports that resolve outside the bundle root and how to restructure or alias the asset path.",
             "tags": [
-                "nextjs",
-                "react",
-                "hydration",
-                "css-modules",
-                "ssr"
+                "react-native",
+                "metro",
+                "bundler",
+                "assets",
+                "javascript"
             ],
-            "angle": "Open with the exact hydration warning and the differing class attribute values. Explain how inconsistent module resolution, conditional rendering, or environment-specific imports can change generated class names between server and client. Show how to stabilize the markup and verify the rendered output matches before hydration.",
-            "slug": "next-js-hydration-mismatch-css-module-class-names-render-differently-on-server-and-client",
-            "draftedAt": "2026-10-18T23:49:58.828Z"
+            "angle": "Start with the Metro error text and the exact import path that fails. Explain Metro's file-watching and project-root restrictions, then show how symlinks, monorepo layout, or bad relative paths cause the resolver to reject the asset. Include the supported fixes: move the file under the root, adjust watch folders, or reference the asset through a path Metro can package.",
+            "slug": "react-native-metro-rejects-an-image-import-with-requiring-unknown-module-for-a-file-outside-the-project-root",
+            "draftedAt": "2026-10-20T00:51:06.793Z"
         }
     ]
 }
