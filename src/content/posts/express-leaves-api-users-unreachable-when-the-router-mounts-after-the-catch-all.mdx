@@ -1,0 +1,333 @@
+---
+title: "Express Leaves `/api/users` Unreachable When the Router Mounts After the Catch-All"
+description: "Show why a later catch-all route shadows mounted Express routers and how to order middleware so nested routes resolve correctly."
+tags: ["express", "routing", "middleware", "nodejs", "http"]
+date: Oct 21, 2026
+cell: "router-mounted-too-late::express::async-route-registration"
+---
+
+`GET /api/users` returns `404 Not Found` or an HTML fallback page instead of the route handler response. In Express, that usually means a later catch-all `app.get('*')` or a static middleware layer has already matched the request, so the mounted router never gets a chance to run.
+
+## How Express decides which handler runs
+
+Express uses a linear, first-match routing model. Every `app.use(...)`, `app.get(...)`, `app.post(...)`, and mounted `Router` is added to an internal stack. For each request, Express walks that stack from top to bottom and invokes the first layer whose path and method match.
+
+That means middleware order is not a style preference. It determines behavior.
+
+If a request to `/api/users` reaches a handler like `app.get('*', ...)` before the API router is mounted, the catch-all can terminate the response with HTML or a `404`. Once a response is sent, later middleware is skipped.
+
+The same applies to static file serving. `express.static(...)` can satisfy a request from the file system and end the pipeline before the API route is reached. If the path maps to a file, directory index, or SPA fallback rule, the request may never reach the router.
+
+## A minimal broken setup
+
+The following example mounts a catch-all before the API router.
+
+```ts
+import express from 'express';
+
+const app = express();
+
+app.get('*', (_req, res) => {
+  res.status(200).send('<html><body><h1>SPA shell</h1></body></html>');
+});
+
+app.use('/api', apiRouter);
+
+app.listen(3000, () => {
+  console.log('listening on 3000');
+});
+
+const apiRouter = express.Router();
+
+apiRouter.get('/users', (_req, res) => {
+  res.json([{ id: 1, name: 'Ada' }]);
+});
+```
+
+A request to `GET /api/users` matches `app.get('*')` first. The handler sends HTML and ends the response. `app.use('/api', apiRouter)` is still in the stack, but it never runs because the request is already complete.
+
+The result is not a router bug. It is the expected outcome of route ordering.
+
+## Why `app.get('*')` shadows mounted routes
+
+`app.get('*')` is intentionally broad. It matches any path for the `GET` method, including `/api/users`, `/favicon.ico`, and `/anything/else`.
+
+Express evaluates the method and path together. For `GET /api/users`, the catch-all is a valid match. If that handler sends a response, downstream middleware is bypassed.
+
+This is especially common in apps that serve both an API and a client-side application from the same server. The usual pattern is:
+
+- API routes under `/api`
+- static assets from `dist/` or `public/`
+- a final HTML fallback for client-side routing
+
+That pattern only works when the fallback is last. If the fallback comes first, it captures API requests too.
+
+## Static middleware can create the same failure mode
+
+`express.static(...)` is also first-match. It serves files directly from disk when the request path maps to a file.
+
+A configuration like this can block API routes if the file layout overlaps in an unintended way:
+
+```ts
+import path from 'node:path';
+import express from 'express';
+
+const app = express();
+
+app.use(express.static(path.join(process.cwd(), 'public')));
+
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+});
+
+app.use('/api', apiRouter);
+
+const apiRouter = express.Router();
+
+apiRouter.get('/users', (_req, res) => {
+  res.json([{ id: 1, name: 'Ada' }]);
+});
+```
+
+If `public/index.html` is returned for every `GET` request, the catch-all serves HTML before the API router. If a static file exists for a request path, the static middleware can also terminate the response before the router.
+
+The rule is the same: put specific routes before broad fallbacks.
+
+## The correct order
+
+Mount the API router before any catch-all route or SPA fallback.
+
+```ts
+import path from 'node:path';
+import express from 'express';
+
+const app = express();
+
+app.use(express.json());
+
+app.use('/api', apiRouter);
+
+app.use(express.static(path.join(process.cwd(), 'public')));
+
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+});
+
+app.listen(3000, () => {
+  console.log('listening on 3000');
+});
+
+const apiRouter = express.Router();
+
+apiRouter.get('/users', (_req, res) => {
+  res.json([{ id: 1, name: 'Ada' }]);
+});
+```
+
+This ordering does three things:
+
+1. API requests under `/api` are resolved first.
+2. Static assets are served next.
+3. The catch-all HTML response is only used as a last resort.
+
+A request to `/api/users` now reaches `apiRouter.get('/users', ...)` before the fallback can match it.
+
+## Confirming the route stack
+
+Express exposes the internal middleware stack on `app._router.stack`. It is not part of the public API, but it is useful for debugging route order.
+
+You can inspect it directly:
+
+```ts
+import express from 'express';
+
+const app = express();
+
+app.get('*', (_req, res) => {
+  res.send('fallback');
+});
+
+app.use('/api', apiRouter);
+
+console.log(
+  app._router.stack.map((layer: any) => ({
+    name: layer.name,
+    path: layer.route?.path ?? layer.regexp?.toString(),
+    methods: layer.route?.methods ?? undefined,
+  })),
+);
+
+const apiRouter = express.Router();
+apiRouter.get('/users', (_req, res) => {
+  res.json([{ id: 1 }]);
+});
+```
+
+The output shows the relative position of the layers. The catch-all should appear after the API mount if the API is supposed to win.
+
+For more readable output, add a small helper:
+
+```ts
+function describeStack(app: express.Express) {
+  return app._router.stack
+    .filter((layer: any) => layer.name !== 'query' && layer.name !== 'expressInit')
+    .map((layer: any) => {
+      if (layer.route) {
+        return {
+          type: 'route',
+          path: layer.route.path,
+          methods: Object.keys(layer.route.methods),
+        };
+      }
+
+      return {
+        type: 'middleware',
+        name: layer.name,
+        regexp: layer.regexp?.toString(),
+      };
+    });
+}
+
+console.log(JSON.stringify(describeStack(app), null, 2));
+```
+
+If the list shows a catch-all route before the router mount, that is the source of the shadowing.
+
+## Logging which layer handles the request
+
+Another way to verify order is to log inside each handler.
+
+```ts
+app.use('/api', (req, _res, next) => {
+  console.log(`api middleware saw ${req.method} ${req.originalUrl}`);
+  next();
+});
+
+app.get('*', (req, res) => {
+  console.log(`fallback handled ${req.method} ${req.originalUrl}`);
+  res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+});
+
+app.use('/api', apiRouter);
+```
+
+For a request to `/api/users`, only the first matching handler should log. If the fallback logs first, the router is mounted too late.
+
+To see whether the router is hit at all, log inside the route itself:
+
+```ts
+apiRouter.get('/users', (_req, res) => {
+  console.log('api route handled GET /api/users');
+  res.json([{ id: 1, name: 'Ada' }]);
+});
+```
+
+If the API log never appears, the request is being consumed earlier in the stack.
+
+## A common SPA pattern done correctly
+
+A single Express server often serves both API endpoints and a client-side application. In that case, the fallback should exclude `/api` paths and should be last in the stack.
+
+One safe pattern is to mount the API first, then serve static assets, then send `index.html` only for non-API `GET` requests.
+
+```ts
+import path from 'node:path';
+import express, { Request, Response, NextFunction } from 'express';
+
+const app = express();
+const publicDir = path.join(process.cwd(), 'public');
+
+app.use(express.json());
+
+app.use('/api', apiRouter);
+
+app.use(express.static(publicDir));
+
+app.get('*', (req: Request, res: Response, next: NextFunction) => {
+  if (req.path.startsWith('/api')) {
+    return next();
+  }
+
+  res.sendFile(path.join(publicDir, 'index.html'));
+});
+
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not Found' });
+});
+
+const apiRouter = express.Router();
+
+apiRouter.get('/users', (_req, res) => {
+  res.json([{ id: 1, name: 'Ada' }]);
+});
+```
+
+This keeps the SPA fallback from intercepting API URLs, even if other middleware is added later.
+
+## Why `next()` matters in custom middleware
+
+A custom middleware can shadow routes just as effectively as `app.get('*')` if it sends a response too early.
+
+```ts
+app.use((req, res, next) => {
+  if (req.method === 'GET') {
+    res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+    return;
+  }
+
+  next();
+});
+
+app.use('/api', apiRouter);
+```
+
+That code blocks every `GET` request, including `/api/users`.
+
+If the middleware is meant to be selective, it must either call `next()` for API requests or be mounted after the API router.
+
+```ts
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    return next();
+  }
+
+  if (req.method === 'GET') {
+    return res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+  }
+
+  next();
+});
+```
+
+The key point is that middleware is not declarative matching. It is sequential execution.
+
+## Practical debugging commands
+
+When the response is HTML instead of JSON, confirm the route shape with `curl` first:
+
+```sh
+curl -i http://localhost:3000/api/users
+```
+
+If the response body is `index.html` or a generic `404` page, the request is reaching a fallback instead of the API route.
+
+If the app is TypeScript-based, start it with source maps enabled so stack traces line up with the route definitions:
+
+```sh
+node --enable-source-maps dist/server.js
+```
+
+If you are using `ts-node`, the runtime still follows the same Express ordering rules. The issue is in the middleware stack, not the transpiler.
+
+## Keeping the route order stable
+
+As the app grows, route order can drift when new middleware gets added near the top of `server.ts` or `app.ts`. Keep these rules in place:
+
+- Mount API routers before catch-all HTML handlers.
+- Put `express.static(...)` before the fallback, but after API routes if the API should always win.
+- Make the fallback exclude `/api` paths.
+- Verify the stack with `app._router.stack` when responses change unexpectedly.
+
+A useful invariant is: specific routes first, broad fallbacks last.
+
+If `/api/users` is returning HTML or `404` text, the fix is to move the API router above the catch-all and to keep the catch-all at the end of the middleware stack. That ordering should be preferred because it matches Express’s first-match model and prevents later static or SPA handlers from shadowing mounted routes.
