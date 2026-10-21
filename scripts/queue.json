@@ -2,20 +2,6 @@
     "generatedAt": "2026-10-18T21:59:47.002Z",
     "ideas": [
         {
-            "cell": "router-mounted-too-late::express::async-route-registration",
-            "title": "Express Leaves `/api/users` Unreachable When the Router Mounts After the Catch-All",
-            "description": "Show why a later catch-all route shadows mounted Express routers and how to order middleware so nested routes resolve correctly.",
-            "tags": [
-                "express",
-                "routing",
-                "middleware",
-                "nodejs",
-                "http"
-            ],
-            "angle": "Open with the 404 or HTML fallback that appears on `/api/users` instead of the route handler. Explain Express's first-match routing model and how a catch-all `app.get('*')` or static middleware can consume requests before the router is mounted. Show the correct middleware order and how to confirm the route stack with `app._router.stack` or logging.",
-            "slug": "express-leaves-api-users-unreachable-when-the-router-mounts-after-the-catch-all"
-        },
-        {
             "cell": "remix-form-action-wrong-route::remix::nested-form-post",
             "title": "Remix Sends a Form Submission to the Wrong Route Because the `action` Path Is Relative",
             "description": "Fix Remix forms that post to an unexpected sibling route when a relative action path resolves against the current URL.",
@@ -102,19 +88,19 @@
     ],
     "drafted": [
         {
-            "cell": "metro-requires-asset-outside-root::react-native::static-image-import",
-            "title": "React Native Metro Rejects an Image Import with \"Requiring unknown module\" for a File Outside the Project Root",
-            "description": "Explain why Metro fails on image imports that resolve outside the bundle root and how to restructure or alias the asset path.",
+            "cell": "router-mounted-too-late::express::async-route-registration",
+            "title": "Express Leaves `/api/users` Unreachable When the Router Mounts After the Catch-All",
+            "description": "Show why a later catch-all route shadows mounted Express routers and how to order middleware so nested routes resolve correctly.",
             "tags": [
-                "react-native",
-                "metro",
-                "bundler",
-                "assets",
-                "javascript"
+                "express",
+                "routing",
+                "middleware",
+                "nodejs",
+                "http"
             ],
-            "angle": "Start with the Metro error text and the exact import path that fails. Explain Metro's file-watching and project-root restrictions, then show how symlinks, monorepo layout, or bad relative paths cause the resolver to reject the asset. Include the supported fixes: move the file under the root, adjust watch folders, or reference the asset through a path Metro can package.",
-            "slug": "react-native-metro-rejects-an-image-import-with-requiring-unknown-module-for-a-file-outside-the-project-root",
-            "draftedAt": "2026-10-20T00:51:06.793Z"
+            "angle": "Open with the 404 or HTML fallback that appears on `/api/users` instead of the route handler. Explain Express's first-match routing model and how a catch-all `app.get('*')` or static middleware can consume requests before the router is mounted. Show the correct middleware order and how to confirm the route stack with `app._router.stack` or logging.",
+            "slug": "express-leaves-api-users-unreachable-when-the-router-mounts-after-the-catch-all",
+            "draftedAt": "2026-10-21T00:17:05.338Z"
         }
     ]
 }
