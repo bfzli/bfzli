@@ -1,0 +1,297 @@
+---
+title: "Remix Sends a Form Submission to the Wrong Route Because the `action` Path Is Relative"
+description: "Fix Remix forms that post to an unexpected sibling route when a relative action path resolves against the current URL."
+tags: ["remix", "forms", "routing", "action", "javascript"]
+date: Oct 22, 2026
+cell: "remix-form-action-wrong-route::remix::nested-form-post"
+---
+
+POST `/dashboard/settings/profile` when the intended target is `/dashboard/settings/profile/edit`; the browser request reaches the sibling route instead of the route module that defines the handler, and Remix reports `404 Not Found` or `405 Method Not Allowed` when no matching `action` exists for that path.
+
+## What breaks
+
+A Remix `<Form>` can submit to the wrong route when `action` is set to a relative path such as `"edit"` or `"save"`. The browser resolves that value against the current URL, not against the route module where the form lives.
+
+That means a form rendered at `/dashboard/settings/profile` with `action="edit"` will post to `/dashboard/settings/edit`. If the intended handler is in `/dashboard/settings/profile/edit`, the request never reaches it.
+
+The failure usually shows up as one of these:
+
+- `404 Not Found` if no route matches the resolved URL
+- `405 Method Not Allowed` if the route exists but does not export an `action`
+- unexpected handler execution when another sibling route happens to match the resolved URL
+
+In nested route trees, the mismatch is easy to miss because the route file path and the URL path are not the same thing. A sibling segment like `edit` or `new` can look close enough to be correct while still resolving somewhere else.
+
+## How Remix and the browser resolve `action`
+
+`<Form>` in Remix ultimately renders a native HTML `form`. The `action` attribute follows standard browser URL resolution rules.
+
+If `action` is:
+
+- absolute, such as `/dashboard/settings/profile/edit`, the browser posts there directly
+- relative, such as `edit` or `./edit`, the browser resolves it against `window.location.pathname`
+- empty or omitted, the browser posts to the current URL
+
+Remix does not reinterpret a relative `action` as “relative to this route module.” It passes the value through to the browser. That distinction matters because route modules are file-based, while form submission uses URL resolution.
+
+For example:
+
+```tsx
+import { Form } from "@remix-run/react";
+
+export default function ProfileSettings() {
+  return (
+    <Form method="post" action="edit">
+      <button type="submit">Edit profile</button>
+    </Form>
+  );
+}
+```
+
+If this component renders at `/dashboard/settings/profile`, the POST target becomes `/dashboard/settings/edit`.
+
+If the intended action handler is in the current route module, but the route URL is `/dashboard/settings/profile`, then `action="edit"` is pointing at a sibling path, not at the same route.
+
+## Why nested segments make this easy to miss
+
+Nested routes often produce URLs that look like filesystem paths. That makes it tempting to think that `action="edit"` means “go to the `edit` child route under the current route file.” That is not how HTML forms work.
+
+Consider these route modules:
+
+```text
+app/routes/dashboard.settings.profile.tsx
+app/routes/dashboard.settings.profile.edit.tsx
+app/routes/dashboard.settings.profile._index.tsx
+```
+
+A form in `dashboard.settings.profile.tsx` may render at `/dashboard/settings/profile`. If the child route is `/dashboard/settings/profile/edit`, a relative `action="edit"` seems plausible.
+
+But the browser does not know anything about Remix route nesting. It only knows the current URL path. From `/dashboard/settings/profile`, `edit` resolves to `/dashboard/settings/edit`, because the last segment `profile` is replaced by `edit` when the relative path has no leading slash.
+
+That is standard URL behavior. The browser treats the current location as the base and resolves path segments accordingly.
+
+This is why the bug appears most often in nested route hierarchies:
+
+- the visible route nesting suggests a parent-child relationship
+- the URL looks like a folder structure
+- a relative form target appears to match the next logical route
+- the actual resolved path drops the last segment of the current URL and replaces it
+
+## Reproducing the problem
+
+A minimal route setup illustrates the mismatch.
+
+```tsx
+// app/routes/dashboard.settings.profile.tsx
+import { Form } from "@remix-run/react";
+
+export default function ProfileSettingsRoute() {
+  return (
+    <div>
+      <h1>Profile settings</h1>
+      <Form method="post" action="edit">
+        <button type="submit">Open edit form</button>
+      </Form>
+    </div>
+  );
+}
+```
+
+```tsx
+// app/routes/dashboard.settings.profile.edit.tsx
+import { ActionFunctionArgs, json } from "@remix-run/node";
+
+export async function action({ request }: ActionFunctionArgs) {
+  const formData = await request.formData();
+  return json({ saved: true, formData: Object.fromEntries(formData) });
+}
+
+export default function EditProfileRoute() {
+  return <p>Edit profile route</p>;
+}
+```
+
+With this structure, the browser sends the form submission to the resolved URL based on the current location. If the current page is `/dashboard/settings/profile`, the request goes to `/dashboard/settings/edit`, not `/dashboard/settings/profile/edit`.
+
+The symptom is not that Remix “misroutes” the form. The form action is resolved correctly according to HTML rules. The problem is that the relative URL is the wrong one for the intended route.
+
+## The fix: use an explicit absolute path
+
+The most direct fix is to use the full path in `action`.
+
+```tsx
+import { Form } from "@remix-run/react";
+
+export default function ProfileSettingsRoute() {
+  return (
+    <Form method="post" action="/dashboard/settings/profile/edit">
+      <button type="submit">Edit profile</button>
+    </Form>
+  );
+}
+```
+
+This removes ambiguity. The browser submits to the exact route you named, regardless of the current URL, nested layout depth, or sibling segments.
+
+Use this when the destination is known and stable. It is the simplest and most readable option for forms that submit to a dedicated action route.
+
+## The route-relative pattern: target the current route module
+
+If the action belongs to the same route module, the cleanest choice is often to omit `action` entirely.
+
+```tsx
+import { Form } from "@remix-run/react";
+import type { ActionFunctionArgs } from "@remix-run/node";
+
+export async function action({ request }: ActionFunctionArgs) {
+  const formData = await request.formData();
+  const name = formData.get("name");
+  return new Response(null, { status: 204 });
+}
+
+export default function ProfileSettingsRoute() {
+  return (
+    <Form method="post">
+      <input name="name" />
+      <button type="submit">Save</button>
+    </Form>
+  );
+}
+```
+
+With no `action`, the form posts to the current URL. That is the route module that rendered the form, which is usually the intended target when the same module exports `action`.
+
+This is safer than `action="."` in many cases because it avoids extra path resolution and makes the intent obvious: submit to the current route.
+
+If the form should submit to the current route module, omitting `action` is usually the simplest correct solution.
+
+## When `action="."` or `action="./"` is appropriate
+
+A relative current-directory reference can also be valid, but it should be used intentionally.
+
+```tsx
+<Form method="post" action=".">
+  <button type="submit">Save</button>
+</Form>
+```
+
+This also resolves to the current URL, but it is more explicit than leaving `action` out. It can be useful when code paths conditionally set `action` and you want an explicit current-route fallback.
+
+The difference is mechanical, not semantic. `.` means “current directory” in URL resolution terms. On a route like `/dashboard/settings/profile`, that resolves to `/dashboard/settings/profile`. It does not mean “current Remix route module” in any special framework-specific way.
+
+Use `.` only when that URL-level meaning is what you want.
+
+## Avoid sibling-relative values like `edit`, `new`, or `save`
+
+The risky pattern is a bare segment:
+
+```tsx
+<Form method="post" action="edit">
+```
+
+That is only correct when the browser base URL is already the directory you want. In a nested route tree, it often is not.
+
+For example:
+
+- current URL `/users/123` plus `action="edit"` resolves to `/users/edit`
+- current URL `/dashboard/settings/profile` plus `action="edit"` resolves to `/dashboard/settings/edit`
+
+If the intended path is a child route, you need the full child path, not a sibling-relative segment.
+
+```tsx
+<Form method="post" action="/dashboard/settings/profile/edit">
+```
+
+That version cannot be misread by the browser.
+
+## How to verify the resolved target
+
+You can confirm what URL the browser will use by inspecting the rendered HTML or by checking the network request in DevTools.
+
+Rendered HTML:
+
+```html
+<form method="post" action="edit">
+```
+
+If the current page URL is `/dashboard/settings/profile`, the resolved request target is `/dashboard/settings/edit`.
+
+A quick way to test from the command line is to emulate the final URL directly with `curl`:
+
+```bash
+curl -i -X POST http://localhost:3000/dashboard/settings/edit
+```
+
+If that returns `404` or `405`, the form is likely posting to the wrong place.
+
+You can also inspect Remix route matching by checking which route file exports `action` for the path you expect. A route exists only if the URL pattern matches the resolved request path.
+
+## Using `useFormAction` for dynamic cases
+
+When the destination depends on route context, use Remix helpers rather than string concatenation. `useFormAction` from `@remix-run/react` can construct a route-aware action URL.
+
+```tsx
+import { Form, useFormAction } from "@remix-run/react";
+
+export default function ProfileSettingsRoute() {
+  const action = useFormAction("/dashboard/settings/profile/edit");
+
+  return (
+    <Form method="post" action={action}>
+      <button type="submit">Edit profile</button>
+    </Form>
+  );
+}
+```
+
+For most cases, a plain absolute path is still clearer. `useFormAction` is more useful when you are building URLs from route params or composing a form action relative to a route in a reusable component.
+
+If you are passing form behavior through reusable components, do not assume the component’s local route context. Make the destination explicit or pass it in as a prop.
+
+```tsx
+type Props = {
+  action: string;
+};
+
+export function SaveForm({ action }: Props) {
+  return (
+    <Form method="post" action={action}>
+      <button type="submit">Save</button>
+    </Form>
+  );
+}
+```
+
+Then call it with:
+
+```tsx
+<SaveForm action="/dashboard/settings/profile/edit" />
+```
+
+## Common traps in nested route setups
+
+Several patterns increase the chance of this bug:
+
+- child route names that match generic actions, like `edit`, `new`, or `create`
+- deeply nested layouts where the rendered URL no longer resembles the route module name
+- reusable form components that set `action` internally
+- assuming route module nesting implies URL-relative form submission
+
+A file like `app/routes/dashboard.settings.profile.tsx` can render under a layout route, while the actual path includes additional parent segments. The visible component hierarchy does not change the browser’s URL base.
+
+If a form is intended for the current route, leave `action` off. If it is intended for a different route, use the full path. Do not rely on sibling-relative segments unless the resolved URL is intentionally part of the design.
+
+## Practical checks before shipping
+
+When a form posts to the wrong route, inspect these points in order:
+
+1. The rendered `action` attribute in the DOM.
+2. The current page URL when the form is submitted.
+3. The route path that actually exports an `action`.
+4. Whether the resolved path is relative or absolute.
+
+If the form is meant for the current route, prefer no `action` at all. If it is meant for another route, prefer the explicit absolute path. Those two patterns avoid the ambiguity that comes from relative URL resolution in nested route trees.
+
+## Takeaway
+
+Prefer an omitted `action` when the form submits to the current route module. Prefer an explicit absolute path when the form submits elsewhere. Avoid bare relative segments like `edit` or `save` unless you have checked the browser’s URL resolution against the current location, because Remix forwards `action` to standard HTML form behavior rather than interpreting it as route-module-relative.
