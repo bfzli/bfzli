@@ -2,20 +2,6 @@
     "generatedAt": "2026-10-18T21:59:47.002Z",
     "ideas": [
         {
-            "cell": "remix-form-action-wrong-route::remix::nested-form-post",
-            "title": "Remix Sends a Form Submission to the Wrong Route Because the `action` Path Is Relative",
-            "description": "Fix Remix forms that post to an unexpected sibling route when a relative action path resolves against the current URL.",
-            "tags": [
-                "remix",
-                "forms",
-                "routing",
-                "action",
-                "javascript"
-            ],
-            "angle": "Open with the exact route that receives the POST and the route that was intended. Explain how Remix resolves relative `action` values against the current location, not the route module you meant, and why nested segments make that easy to miss. Show the explicit paths or route-relative patterns that send the submission to the correct action.",
-            "slug": "remix-sends-a-form-submission-to-the-wrong-route-because-the-action-path-is-relative"
-        },
-        {
             "cell": "electron-preload-contextbridge-missing::electron::context-isolation",
             "title": "Electron Fails with `ipcRenderer is undefined` When the Preload Bridge Is Not Exposed Through `contextBridge`",
             "description": "Explain why a renderer cannot see `ipcRenderer` under context isolation and how to expose only the API you need.",
@@ -88,19 +74,19 @@
     ],
     "drafted": [
         {
-            "cell": "router-mounted-too-late::express::async-route-registration",
-            "title": "Express Leaves `/api/users` Unreachable When the Router Mounts After the Catch-All",
-            "description": "Show why a later catch-all route shadows mounted Express routers and how to order middleware so nested routes resolve correctly.",
+            "cell": "remix-form-action-wrong-route::remix::nested-form-post",
+            "title": "Remix Sends a Form Submission to the Wrong Route Because the `action` Path Is Relative",
+            "description": "Fix Remix forms that post to an unexpected sibling route when a relative action path resolves against the current URL.",
             "tags": [
-                "express",
+                "remix",
+                "forms",
                 "routing",
-                "middleware",
-                "nodejs",
-                "http"
+                "action",
+                "javascript"
             ],
-            "angle": "Open with the 404 or HTML fallback that appears on `/api/users` instead of the route handler. Explain Express's first-match routing model and how a catch-all `app.get('*')` or static middleware can consume requests before the router is mounted. Show the correct middleware order and how to confirm the route stack with `app._router.stack` or logging.",
-            "slug": "express-leaves-api-users-unreachable-when-the-router-mounts-after-the-catch-all",
-            "draftedAt": "2026-10-21T00:17:05.338Z"
+            "angle": "Open with the exact route that receives the POST and the route that was intended. Explain how Remix resolves relative `action` values against the current location, not the route module you meant, and why nested segments make that easy to miss. Show the explicit paths or route-relative patterns that send the submission to the correct action.",
+            "slug": "remix-sends-a-form-submission-to-the-wrong-route-because-the-action-path-is-relative",
+            "draftedAt": "2026-10-22T00:20:39.678Z"
         }
     ]
 }
