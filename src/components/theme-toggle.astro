@@ -38,10 +38,11 @@ import { Icon } from '@/components'
             var next = MODES[(MODES.indexOf(current) + 1) % MODES.length]
 
             function swap() {
+                // Colors snap so the snapshot is clean, while the icon keeps its
+                // own transition (none under reduced motion).
                 var style = document.createElement('style')
                 style.textContent =
-                    '*,*::before,*::after{transition:none !important}' +
-                    '#toggle-theme>span{transition:transform 500ms cubic-bezier(.34,1.56,.64,1),opacity 300ms ease !important}'
+                    '*:not(#toggle-theme>span),*::before,*::after{transition:none !important}'
                 document.head.appendChild(style)
 
                 save(next)
@@ -54,10 +55,16 @@ import { Icon } from '@/components'
                 })
             }
 
+            var dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+            var scheme = next === 'system' ? (dark ? 'dark' : 'light') : next
             var reduce = window.matchMedia(
                 '(prefers-reduced-motion: reduce)'
             ).matches
-            if (!document.startViewTransition || reduce) return swap()
+
+            // Switching to or from system can leave the colors unchanged, and
+            // then only the icon animates.
+            var same = scheme === root.getAttribute('color-scheme')
+            if (!document.startViewTransition || reduce || same) return swap()
 
             // Reveal the new theme as a circle growing out of the button.
             var rect = button.getBoundingClientRect()

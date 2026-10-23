@@ -63,6 +63,7 @@ a {
 
 #toggle-theme {
     display: inline-grid;
+    transition: transform 150ms ease;
 }
 
 #toggle-theme > span {
@@ -74,10 +75,11 @@ a {
     opacity: 0;
 }
 
-html[data-theme-mode='system'] .theme-icon-system,
-html[data-theme-mode='light'] .theme-icon-light,
-html[data-theme-mode='dark'] .theme-icon-dark {
-    transform: rotate(0) scale(1);
+/* Needs the id too, or the hidden state above outranks it. */
+html[data-theme-mode='system'] #toggle-theme > .theme-icon-system,
+html[data-theme-mode='light'] #toggle-theme > .theme-icon-light,
+html[data-theme-mode='dark'] #toggle-theme > .theme-icon-dark {
+    transform: none;
     opacity: 1;
 }
 
