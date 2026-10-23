@@ -1,14 +1,8 @@
 ---
 import type { Experience } from '@/types'
+import { initials } from '@/utils/text'
 
 const job = Astro.props as Experience
-
-const initials = job.company
-    .split(' ')
-    .map((w) => w[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase()
 ---
 
 <div class='flex gap-4'>
@@ -27,7 +21,7 @@ const initials = job.company
                     class='h-full w-full object-cover'
                 />
             ) : (
-                <span>{initials}</span>
+                <span>{initials(job.company)}</span>
             )
         }
     </div>

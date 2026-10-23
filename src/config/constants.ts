@@ -7,6 +7,8 @@ const profile = {
     shortName: 'Benjamin',
     description: 'Expresing my thoughts and ideas through code and writing.',
     bio: `A curious software engineer based in ${location}, solving engineering problems, building products people use, and sharing what I learn along the way.`,
+    headline:
+        'A curious software engineer in Skopje, building products people use.',
     location,
     image: '/og/index.png',
     username: 'bfzli',
