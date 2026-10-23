@@ -2,20 +2,6 @@
     "generatedAt": "2026-10-18T21:59:47.002Z",
     "ideas": [
         {
-            "cell": "electron-preload-contextbridge-missing::electron::context-isolation",
-            "title": "Electron Fails with `ipcRenderer is undefined` When the Preload Bridge Is Not Exposed Through `contextBridge`",
-            "description": "Explain why a renderer cannot see `ipcRenderer` under context isolation and how to expose only the API you need.",
-            "tags": [
-                "electron",
-                "ipc",
-                "preload",
-                "contextbridge",
-                "security"
-            ],
-            "angle": "Open with the renderer-side `ipcRenderer is undefined` error and the preload script setup. Explain how `contextIsolation: true` keeps Node APIs out of the page context and why assigning globals in preload does not bridge them. Show the `contextBridge.exposeInMainWorld` pattern and the matching renderer call site.",
-            "slug": "electron-fails-with-ipcrenderer-is-undefined-when-the-preload-bridge-is-not-exposed-through-contextbridge"
-        },
-        {
             "cell": "turborepo-deadlock-infinite-rebuild::turbo::watch-loop",
             "title": "Turborepo Keeps Rebuilding the Same Package Because a Task Writes Into Its Own Input Directory",
             "description": "Stop a watch loop caused by generated files landing inside a task's watched inputs and triggering endless rebuilds.",
@@ -74,19 +60,19 @@
     ],
     "drafted": [
         {
-            "cell": "remix-form-action-wrong-route::remix::nested-form-post",
-            "title": "Remix Sends a Form Submission to the Wrong Route Because the `action` Path Is Relative",
-            "description": "Fix Remix forms that post to an unexpected sibling route when a relative action path resolves against the current URL.",
+            "cell": "electron-preload-contextbridge-missing::electron::context-isolation",
+            "title": "Electron Fails with `ipcRenderer is undefined` When the Preload Bridge Is Not Exposed Through `contextBridge`",
+            "description": "Explain why a renderer cannot see `ipcRenderer` under context isolation and how to expose only the API you need.",
             "tags": [
-                "remix",
-                "forms",
-                "routing",
-                "action",
-                "javascript"
+                "electron",
+                "ipc",
+                "preload",
+                "contextbridge",
+                "security"
             ],
-            "angle": "Open with the exact route that receives the POST and the route that was intended. Explain how Remix resolves relative `action` values against the current location, not the route module you meant, and why nested segments make that easy to miss. Show the explicit paths or route-relative patterns that send the submission to the correct action.",
-            "slug": "remix-sends-a-form-submission-to-the-wrong-route-because-the-action-path-is-relative",
-            "draftedAt": "2026-10-22T00:20:39.678Z"
+            "angle": "Open with the renderer-side `ipcRenderer is undefined` error and the preload script setup. Explain how `contextIsolation: true` keeps Node APIs out of the page context and why assigning globals in preload does not bridge them. Show the `contextBridge.exposeInMainWorld` pattern and the matching renderer call site.",
+            "slug": "electron-fails-with-ipcrenderer-is-undefined-when-the-preload-bridge-is-not-exposed-through-contextbridge",
+            "draftedAt": "2026-10-23T00:18:14.052Z"
         }
     ]
 }
