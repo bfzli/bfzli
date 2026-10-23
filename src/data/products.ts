@@ -2,7 +2,7 @@ import type { ProductGroup, Venture, VibeCoding } from '@/types'
 
 import {
     betterfiletransfer,
-    openemail,
+    nextmail,
     envless,
     ip2geo,
     wallpapppers,
@@ -20,10 +20,11 @@ import {
 
 export const products: Venture[] = [
     {
-        name: 'OpenEmail',
-        description: 'Emails that belong to you, entirely.',
-        icon: openemail,
-        url: 'https://openemail.uk'
+        name: 'Nextmail',
+        description:
+            'AI-native email for businesses, developers, and AI agents.',
+        icon: nextmail,
+        url: 'https://nextmail.sh'
     },
     {
         name: 'Envless',
@@ -75,12 +76,6 @@ export const vibeCoded: Venture[] = [
 
 export const formerProducts: Venture[] = [
     {
-        name: 'Pikëgjaku',
-        description: 'Dhuro gjak — sot për dikë, nesër për ty.',
-        icon: pikegjaku,
-        url: 'https://pikegjaku.com'
-    },
-    {
         name: 'Launchdock',
         description: 'Where self-hosting takes off without limits.',
         icon: launchdock,
@@ -89,6 +84,12 @@ export const formerProducts: Venture[] = [
 ]
 
 export const graveyard: Venture[] = [
+    {
+        name: 'Pikëgjaku',
+        description: 'Dhuro gjak — sot për dikë, nesër për ty.',
+        icon: pikegjaku,
+        url: 'https://pikegjaku.com'
+    },
     {
         name: 'Cloudagents',
         description: 'One-click cloud hosting for OpenClaw AI agents.',
