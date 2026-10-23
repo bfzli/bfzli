@@ -37,18 +37,56 @@ import { Icon } from '@/components'
             var current = root.getAttribute('data-theme-mode')
             var next = MODES[(MODES.indexOf(current) + 1) % MODES.length]
 
-            var style = document.createElement('style')
-            style.textContent =
-                '*,*::before,*::after{transition:none !important}'
-            document.head.appendChild(style)
+            function swap() {
+                var style = document.createElement('style')
+                style.textContent =
+                    '*,*::before,*::after{transition:none !important}' +
+                    '#toggle-theme>span{transition:transform 500ms cubic-bezier(.34,1.56,.64,1),opacity 300ms ease !important}'
+                document.head.appendChild(style)
 
-            save(next)
-            document.dispatchEvent(new CustomEvent('themechange'))
+                save(next)
+                document.dispatchEvent(new CustomEvent('themechange'))
 
-            requestAnimationFrame(function () {
                 requestAnimationFrame(function () {
-                    style.remove()
+                    requestAnimationFrame(function () {
+                        style.remove()
+                    })
                 })
+            }
+
+            var reduce = window.matchMedia(
+                '(prefers-reduced-motion: reduce)'
+            ).matches
+            if (!document.startViewTransition || reduce) return swap()
+
+            // Reveal the new theme as a circle growing out of the button.
+            var rect = button.getBoundingClientRect()
+            var x = rect.left + rect.width / 2
+            var y = rect.top + rect.height / 2
+            var r = Math.hypot(
+                Math.max(x, innerWidth - x),
+                Math.max(y, innerHeight - y)
+            )
+
+            root.classList.add('theme-switching')
+            var transition = document.startViewTransition(swap)
+            transition.finished.finally(function () {
+                root.classList.remove('theme-switching')
+            })
+            transition.ready.then(function () {
+                root.animate(
+                    {
+                        clipPath: [
+                            'circle(0px at ' + x + 'px ' + y + 'px)',
+                            'circle(' + r + 'px at ' + x + 'px ' + y + 'px)'
+                        ]
+                    },
+                    {
+                        duration: 600,
+                        easing: 'cubic-bezier(0.65, 0, 0.35, 1)',
+                        pseudoElement: '::view-transition-new(root)'
+                    }
+                )
             })
         })
     })
