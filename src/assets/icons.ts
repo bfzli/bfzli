@@ -5,7 +5,6 @@ import arrowSquareOut from '@phosphor-icons/core/assets/duotone/arrow-square-out
 import calendarBlank from '@phosphor-icons/core/assets/duotone/calendar-blank-duotone.svg?raw'
 import monitor from '@phosphor-icons/core/assets/duotone/monitor-duotone.svg?raw'
 import moon from '@phosphor-icons/core/assets/duotone/moon-duotone.svg?raw'
-import smileySad from '@phosphor-icons/core/assets/duotone/smiley-sad-duotone.svg?raw'
 import sun from '@phosphor-icons/core/assets/duotone/sun-duotone.svg?raw'
 import tag from '@phosphor-icons/core/assets/duotone/tag-duotone.svg?raw'
 
@@ -15,7 +14,6 @@ export const icons: Record<IconName, string> = {
     calendarBlank,
     monitor,
     moon,
-    smileySad,
     sun,
     tag
 }

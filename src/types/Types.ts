@@ -55,7 +55,6 @@ export type IconName =
     | 'calendarBlank'
     | 'monitor'
     | 'moon'
-    | 'smileySad'
     | 'sun'
     | 'tag'
 
