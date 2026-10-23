@@ -27,27 +27,27 @@ export const products: Venture[] = [
         url: 'https://nextmail.sh'
     },
     {
+        name: 'Website',
+        description:
+            'Create a website for yourself and your business, free with AI.',
+        icon: website,
+        url: 'https://businesswebsite.ai'
+    },
+    {
         name: 'Envless',
         description: 'Environment variables, without the mess.',
         icon: envless,
         url: 'https://envless.cloud'
-    },
+    }
+]
+
+export const vibeCoded: Venture[] = [
     {
         name: 'Ip2Geo',
         description: "Programmatically convert IP's into GEO location data.",
         icon: ip2geo,
         url: 'https://ip2geo.dev'
     },
-    {
-        name: 'Website',
-        description:
-            'Create a website for yourself and your business, free with AI.',
-        icon: website,
-        url: 'https://businesswebsite.ai'
-    }
-]
-
-export const vibeCoded: Venture[] = [
     {
         name: 'Wallpapppers',
         description: 'The next-generation wallpaper platform powered by AI.',
