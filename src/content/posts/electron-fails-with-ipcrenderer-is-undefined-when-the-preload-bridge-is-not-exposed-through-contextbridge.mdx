@@ -1,0 +1,328 @@
+---
+title: "Electron Fails with `ipcRenderer is undefined` When the Preload Bridge Is Not Exposed Through `contextBridge`"
+description: "Explain why a renderer cannot see `ipcRenderer` under context isolation and how to expose only the API you need."
+tags: ["electron", "ipc", "preload", "contextbridge", "security"]
+date: Oct 23, 2026
+cell: "electron-preload-contextbridge-missing::electron::context-isolation"
+---
+
+## `ipcRenderer is undefined` in the renderer with a preload script
+
+A renderer process breaks with `ReferenceError: ipcRenderer is undefined` when the page code tries to call `ipcRenderer.send(...)`, but the preload script only assigned `ipcRenderer` to a global inside preload and did not expose it through `contextBridge`.
+
+This happens in Electron apps that enable `contextIsolation: true`. Under context isolation, the page JavaScript and the preload JavaScript run in separate worlds. The preload world can access Node.js APIs such as `require('electron')`, but the page world cannot see those variables unless they are explicitly bridged.
+
+## Why the renderer cannot see `ipcRenderer`
+
+Electron’s security model separates the renderer page context from the preload context when `contextIsolation` is enabled. That is the default recommendation in modern Electron apps.
+
+The important part is that the preload script does not run “inside” the same global object as the page. It runs in its own isolated world. If the preload script does this:
+
+```ts
+// preload.ts
+import { ipcRenderer } from 'electron'
+
+;(window as any).ipcRenderer = ipcRenderer
+```
+
+that assignment does not make `ipcRenderer` available to normal page scripts in the way a plain browser global would. The page still executes in the isolated renderer world, where `ipcRenderer` is not defined unless something is placed onto `window` using Electron’s bridge API.
+
+The result is straightforward:
+
+```ts
+// renderer.ts
+ipcRenderer.send('ping')
+```
+
+This throws:
+
+```text
+ReferenceError: ipcRenderer is not defined
+```
+
+The renderer context has no direct access to the Electron module. It also should not have unrestricted access to it. Exposing the whole `ipcRenderer` object defeats the point of context isolation, because it gives page code broad IPC capabilities.
+
+## The setup that triggers the error
+
+A common failing configuration looks like this.
+
+```ts
+// main.ts
+import { app, BrowserWindow } from 'electron'
+import path from 'node:path'
+
+function createWindow() {
+  const win = new BrowserWindow({
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  win.loadFile('index.html')
+}
+
+app.whenReady().then(createWindow)
+```
+
+Preload script:
+
+```ts
+// preload.ts
+import { ipcRenderer } from 'electron'
+
+;(window as any).ipcRenderer = ipcRenderer
+```
+
+Renderer script:
+
+```ts
+// renderer.ts
+ipcRenderer.send('renderer-ready')
+```
+
+This fails because `renderer.ts` runs in the page world. The `ipcRenderer` variable was never declared in that world. Assigning a property on the preload-side `window` object does not create a lexical binding in the page script.
+
+With `contextIsolation: true`, the page script also cannot rely on `require` or `import` to pull in Electron modules. `nodeIntegration: false` keeps those APIs out of the page context entirely.
+
+## Why assigning globals in preload is not enough
+
+A preload script can still talk to Node.js and Electron. The mistake is assuming that writing to `window` from preload behaves like a regular browser global injection.
+
+It does not, because the page and preload have different JavaScript environments. The preload world may have its own `window`, its own globals, and its own object graph. `contextIsolation` prevents direct sharing of objects between the two worlds to reduce the risk of page code tampering with privileged APIs.
+
+Even when a property appears on a shared-looking `window` object, Electron does not let arbitrary preload objects cross the boundary safely. The supported way to pass data or functions into the page is `contextBridge.exposeInMainWorld`.
+
+## The correct pattern: expose a narrow API with `contextBridge`
+
+The fix is to expose only the functions you actually need. In most cases, the renderer should not get `ipcRenderer` itself. It should get a small wrapper API.
+
+```ts
+// preload.ts
+import { contextBridge, ipcRenderer } from 'electron'
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  sendPing: () => ipcRenderer.send('ping'),
+  onPong: (callback: (value: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: string) => callback(value)
+    ipcRenderer.on('pong', listener)
+
+    return () => {
+      ipcRenderer.removeListener('pong', listener)
+    }
+  },
+})
+```
+
+Renderer-side usage:
+
+```ts
+// renderer.ts
+window.electronAPI.sendPing()
+
+const unsubscribe = window.electronAPI.onPong((value) => {
+  console.log(value)
+})
+
+// later
+unsubscribe()
+```
+
+This pattern works because `contextBridge.exposeInMainWorld` publishes the `electronAPI` object into the renderer’s page context in a supported way. The page does not gain Node.js access. It gets only the methods that the preload script intentionally exposes.
+
+## Matching the types in TypeScript
+
+In TypeScript, `window.electronAPI` needs a type declaration in the renderer side. Add a global declaration file such as `src/renderer/global.d.ts`:
+
+```ts
+export {}
+
+declare global {
+  interface Window {
+    electronAPI: {
+      sendPing: () => void
+      onPong: (callback: (value: string) => void) => () => void
+    }
+  }
+}
+```
+
+This keeps the renderer code type-safe.
+
+```ts
+// renderer.ts
+window.electronAPI.sendPing()
+```
+
+If the API is not declared, TypeScript will raise an error even if the runtime bridge is correct. That is a compile-time issue, not the Electron error, but it often appears in the same setup.
+
+## Why `contextBridge` fixes the boundary
+
+`contextBridge.exposeInMainWorld` serializes or proxies the exposed API in a controlled way. The renderer gets a safe bridge object, not a direct reference to the preload’s privileged environment.
+
+That difference matters for two reasons:
+
+1. The renderer can call the functions without having direct access to `ipcRenderer`.
+2. The exposed API can be kept minimal, which reduces the attack surface.
+
+A bridge function like `sendPing` is much safer than exposing the entire `ipcRenderer` object because it restricts the renderer to one channel and one operation.
+
+## A complete minimal example
+
+Main process:
+
+```ts
+// main.ts
+import { app, BrowserWindow } from 'electron'
+import path from 'node:path'
+import { ipcMain } from 'electron'
+
+function createWindow() {
+  const win = new BrowserWindow({
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  win.loadFile('index.html')
+}
+
+ipcMain.on('ping', (event) => {
+  event.sender.send('pong', 'pong from main')
+})
+
+app.whenReady().then(createWindow)
+```
+
+Preload:
+
+```ts
+// preload.ts
+import { contextBridge, ipcRenderer } from 'electron'
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  sendPing: () => ipcRenderer.send('ping'),
+  onPong: (callback: (value: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, value: string) => callback(value)
+    ipcRenderer.on('pong', handler)
+    return () => ipcRenderer.removeListener('pong', handler)
+  },
+})
+```
+
+Renderer:
+
+```ts
+// renderer.ts
+window.electronAPI.onPong((value) => {
+  console.log(value)
+})
+
+window.electronAPI.sendPing()
+```
+
+This arrangement uses the preload script as a controlled bridge between the renderer and main process.
+
+## What happens if `contextIsolation` is off
+
+If `contextIsolation` is `false`, the page and preload share one JavaScript world, so the renderer may be able to see globals assigned by preload. That can make `window.ipcRenderer = ipcRenderer` appear to work.
+
+That configuration is not the recommended solution. It weakens the isolation boundary and makes it easier for page code to reach privileged APIs. Modern Electron guidance is to keep `contextIsolation: true` and use `contextBridge` for explicit exposure.
+
+If a project relies on globals assigned from preload and then later enables `contextIsolation`, the renderer-side `ReferenceError` appears immediately because the old pattern no longer crosses the boundary.
+
+## Common mistakes that produce the same symptom
+
+The same error can show up for a few related reasons.
+
+### Using `ipcRenderer` directly in the renderer
+
+This is the simplest failure.
+
+```ts
+// renderer.ts
+ipcRenderer.send('ping')
+```
+
+With `nodeIntegration: false`, `ipcRenderer` is not available in the page.
+
+### Exposing the wrong object name
+
+If preload exposes `electronAPI` but the renderer calls `ipcRenderer`, the renderer will still fail.
+
+```ts
+// preload.ts
+contextBridge.exposeInMainWorld('electronAPI', {
+  sendPing: () => ipcRenderer.send('ping'),
+})
+```
+
+```ts
+// renderer.ts
+ipcRenderer.send('ping') // ReferenceError
+```
+
+The call site must match the exposed property name exactly.
+
+### Forgetting to load the preload script
+
+If `preload` is not set on `BrowserWindow`, then `contextBridge.exposeInMainWorld` never runs.
+
+```ts
+new BrowserWindow({
+  webPreferences: {
+    contextIsolation: true,
+    nodeIntegration: false,
+  },
+})
+```
+
+In that case, `window.electronAPI` is undefined, and any renderer call against it fails.
+
+### Importing Electron into a bundled renderer
+
+If a bundler includes `import { ipcRenderer } from 'electron'` in renderer code, that code can still fail depending on bundler configuration and Electron settings. The renderer should not depend on Electron internals directly when `nodeIntegration` is off.
+
+## Verifying the fix
+
+To confirm the bridge is working, inspect the renderer console and test the exposed method directly.
+
+```ts
+console.log(window.electronAPI)
+window.electronAPI.sendPing()
+```
+
+If `window.electronAPI` is `undefined`, the preload script is not running, the bridge call is missing, or the property name does not match. If `window.electronAPI` exists but the IPC call does nothing, check the channel names in `ipcRenderer.send('ping')` and `ipcMain.on('ping', ...)`.
+
+The two sides must agree exactly on the channel string.
+
+## Recommended security shape
+
+Expose the smallest surface that satisfies the renderer’s needs. Prefer purpose-built methods over generic IPC access.
+
+Good:
+
+```ts
+contextBridge.exposeInMainWorld('electronAPI', {
+  openSettings: () => ipcRenderer.invoke('settings:open'),
+})
+```
+
+Less desirable:
+
+```ts
+contextBridge.exposeInMainWorld('electronAPI', {
+  ipcRenderer,
+})
+```
+
+The first pattern keeps the renderer on a narrow path. The second hands over a broad API and makes it easier for page code to send arbitrary messages.
+
+Use `ipcRenderer.invoke` and `ipcMain.handle` when the renderer needs a request-response flow. Use `send` and `on` for fire-and-forget events. Keep the channel names namespaced, such as `settings:open` or `window:minimize`, so they stay easy to audit.
+
+## Practical takeaway
+
+Prefer `contextIsolation: true`, keep `nodeIntegration: false`, and expose a minimal renderer API with `contextBridge.exposeInMainWorld`. Do not assign `ipcRenderer` directly to a preload global and expect renderer code to see it. That assignment does not bridge the isolated world, so the renderer still throws `ReferenceError: ipcRenderer is not defined`. The stable fix is to expose only the exact functions the page needs and call those methods from `window.electronAPI` in the renderer.
