@@ -2,20 +2,6 @@
     "generatedAt": "2026-10-18T21:59:47.002Z",
     "ideas": [
         {
-            "cell": "vercel-env-build-time-undefined::vercel::edge-vs-runtime",
-            "title": "Vercel Builds a Next.js App with `process.env` Undefined in Client Code",
-            "description": "Show why browser bundles cannot read server-only env vars and how to separate build-time, server, and client values.",
-            "tags": [
-                "vercel",
-                "nextjs",
-                "environment-variables",
-                "build",
-                "client"
-            ],
-            "angle": "Open with the exact undefined value in the browser bundle or shipped code. Explain the difference between variables embedded at build time, runtime server variables, and `NEXT_PUBLIC_` values that are intentionally exposed to the client. Show how to move server-only reads out of client code and how to verify what ends up in the bundle.",
-            "slug": "vercel-builds-a-next-js-app-with-process-env-undefined-in-client-code"
-        },
-        {
             "cell": "eslint-flat-config-parser-mismatch::eslint::typescript-project",
             "title": "ESLint Fails with `Parsing error: Cannot read file tsconfig.json` After Switching to Flat Config",
             "description": "Explain why ESLint can no longer find the TypeScript project file and how to point the parser at the right path.",
@@ -46,19 +32,19 @@
     ],
     "drafted": [
         {
-            "cell": "turborepo-deadlock-infinite-rebuild::turbo::watch-loop",
-            "title": "Turborepo Keeps Rebuilding the Same Package Because a Task Writes Into Its Own Input Directory",
-            "description": "Stop a watch loop caused by generated files landing inside a task's watched inputs and triggering endless rebuilds.",
+            "cell": "vercel-env-build-time-undefined::vercel::edge-vs-runtime",
+            "title": "Vercel Builds a Next.js App with `process.env` Undefined in Client Code",
+            "description": "Show why browser bundles cannot read server-only env vars and how to separate build-time, server, and client values.",
             "tags": [
-                "turborepo",
-                "monorepo",
-                "watch",
+                "vercel",
+                "nextjs",
+                "environment-variables",
                 "build",
-                "filesystem"
+                "client"
             ],
-            "angle": "Open with the repeated rebuild symptom and the task that never settles. Explain how Turborepo hashes inputs and how writing build output into a watched source directory causes the file change to re-trigger the same task. Show how to move artifacts to a separate output folder, exclude generated paths, or adjust task configuration.",
-            "slug": "turborepo-keeps-rebuilding-the-same-package-because-a-task-writes-into-its-own-input-directory",
-            "draftedAt": "2026-10-24T00:10:17.855Z"
+            "angle": "Open with the exact undefined value in the browser bundle or shipped code. Explain the difference between variables embedded at build time, runtime server variables, and `NEXT_PUBLIC_` values that are intentionally exposed to the client. Show how to move server-only reads out of client code and how to verify what ends up in the bundle.",
+            "slug": "vercel-builds-a-next-js-app-with-process-env-undefined-in-client-code",
+            "draftedAt": "2026-10-24T23:53:59.504Z"
         }
     ]
 }
