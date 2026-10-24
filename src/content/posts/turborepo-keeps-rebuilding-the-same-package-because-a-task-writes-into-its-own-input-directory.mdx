@@ -1,0 +1,363 @@
+---
+title: "Turborepo Keeps Rebuilding the Same Package Because a Task Writes Into Its Own Input Directory"
+description: "Stop a watch loop caused by generated files landing inside a task's watched inputs and triggering endless rebuilds."
+tags: ["turborepo", "monorepo", "watch", "build", "filesystem"]
+date: Oct 24, 2026
+cell: "turborepo-deadlock-infinite-rebuild::turbo::watch-loop"
+---
+
+`turbo run build --watch` never settles for a package, and the terminal keeps printing `cache miss` and `running` for the same task after every rebuild. In many cases the loop ends with repeated file-change notices such as `file changed: dist/index.js` or `watching for changes...`, followed by the same task starting again.
+
+## Why the loop happens
+
+Turborepo computes a hash for each task from the files declared as inputs. That hash determines whether a task can reuse cache output or must run again.
+
+For a package task like `build`, the input set usually includes source files under that package directory. If the build writes generated files into a directory that is also included in the task’s watched inputs, Turborepo sees its own output as a new input change.
+
+That creates a feedback loop:
+
+1. `turbo run build --watch` starts.
+2. The build emits files into a watched directory such as `src/generated`, `src/types`, or `packages/foo/src/generated`.
+3. Turborepo notices the filesystem change.
+4. The hash changes because an input changed.
+5. The same `build` task runs again.
+6. The build writes the same files again.
+7. The loop repeats.
+
+This is not specific to one framework. It can happen with code generators, schema emitters, API client generation, TypeScript declaration output, CSS modules, protobuf codegen, or any build step that writes into the same tree that the task is watching.
+
+## How Turborepo decides what to watch
+
+Turborepo task configuration lives in `turbo.json`. A task’s `inputs` define the files that affect the hash. A task’s `outputs` define the files produced by the task for caching.
+
+A common configuration looks like this:
+
+```json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "package.json", "tsconfig.json"],
+      "outputs": ["dist/**"]
+    }
+  }
+}
+```
+
+If the task writes to `dist/**`, and `dist/**` is excluded from `inputs` by default or not present in the source glob, the build can settle normally.
+
+The problem starts when output paths overlap with input paths.
+
+For example:
+
+```json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "inputs": ["src/**", "package.json"],
+      "outputs": ["src/generated/**"]
+    }
+  }
+}
+```
+
+If the build writes into `src/generated/**`, that path is both an output and part of the source tree being watched. Even if the task only claims `src/**` as inputs, the generated files still live under a watched subtree. File change detection sees the write, and the next hash calculation changes.
+
+## A concrete example of the loop
+
+A package script that generates a file into `src` can trigger the loop immediately.
+
+`packages/api/package.json`:
+
+```json
+{
+  "name": "@acme/api",
+  "scripts": {
+    "build": "tsx scripts/generate.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "turbo": "^2.0.0"
+  }
+}
+```
+
+`packages/api/scripts/generate.ts`:
+
+```ts
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const outDir = join(process.cwd(), "src", "generated");
+const outFile = join(outDir, "schema.ts");
+
+await mkdir(outDir, { recursive: true });
+
+const content = `export const schemaVersion = ${JSON.stringify("1.0.0")};\n`;
+await writeFile(outFile, content);
+```
+
+`turbo.json`:
+
+```json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "inputs": ["src/**", "scripts/**", "package.json"],
+      "outputs": ["src/generated/**"]
+    }
+  }
+}
+```
+
+Run:
+
+```bash
+pnpm turbo run build --watch
+```
+
+The script writes `src/generated/schema.ts`. Because `src/**` is part of the watched input tree, Turborepo sees a changed file in the task’s own input set. The task reruns, rewrites the same file, and repeats.
+
+## Why the cache does not save you
+
+It is tempting to expect the cache to short-circuit the loop. It usually does not.
+
+Turborepo’s cache is based on a content hash of inputs. The moment the generated file changes, the hash changes. If the generator produces the same logical content but rewrites the file each run, the filesystem event still occurs. Even when the final file contents are identical, some watchers still react to the write operation itself, and Turborepo still sees activity in the watched tree.
+
+A `build` task that is both:
+
+- a producer of files, and
+- a watcher of the directory that contains those files
+
+can keep rearming itself.
+
+## Preferred fix: write artifacts outside watched source directories
+
+The cleanest fix is to move generated artifacts into a separate output directory that is not part of the task’s input glob.
+
+A common pattern is to write build output to `dist`, `build`, or a dedicated cache directory such as `.turbo/generated`.
+
+Example:
+
+`packages/api/scripts/generate.ts`:
+
+```ts
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const outDir = join(process.cwd(), "dist", "generated");
+const outFile = join(outDir, "schema.ts");
+
+await mkdir(outDir, { recursive: true });
+
+await writeFile(outFile, `export const schemaVersion = "1.0.0";\n`);
+```
+
+Update `turbo.json`:
+
+```json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "inputs": ["src/**", "scripts/**", "package.json"],
+      "outputs": ["dist/**"]
+    }
+  }
+}
+```
+
+This works because `src/**` remains the source input, while `dist/**` is treated as task output.
+
+If other tools need to import the generated file, point them at `dist/generated/schema.ts` or add a postbuild step that copies it into the right runtime location without placing it in the watched source tree.
+
+## Alternative fix: exclude generated paths from the watched inputs
+
+If the generated files must stay under the package directory, exclude them from task inputs so Turborepo does not hash them.
+
+Use a negated glob in `inputs`:
+
+```json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "inputs": ["src/**", "!src/generated/**", "scripts/**", "package.json"],
+      "outputs": ["src/generated/**"]
+    }
+  }
+}
+```
+
+This tells Turborepo to include `src/**` but ignore `src/generated/**` when calculating the hash.
+
+Use this only when the generated directory truly is derived output. If source files or handwritten files appear there later, they will no longer affect the task hash.
+
+A safer variant is to keep handwritten inputs and generated outputs in different roots:
+
+- `src/**` for source
+- `generated/**` for derived files
+- `dist/**` for compiled artifacts
+
+That separation makes the configuration easier to reason about.
+
+## Another fix: split generation from build
+
+A single task that both generates files and compiles them is easy to misconfigure. Splitting generation into its own task reduces the chance of a self-triggered loop.
+
+`turbo.json`:
+
+```json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "generate": {
+      "inputs": ["scripts/**", "schema/**", "package.json"],
+      "outputs": ["generated/**"]
+    },
+    "build": {
+      "dependsOn": ["generate"],
+      "inputs": ["src/**", "generated/**", "tsconfig.json", "package.json"],
+      "outputs": ["dist/**"]
+    }
+  }
+}
+```
+
+Then use separate scripts:
+
+`packages/api/package.json`:
+
+```json
+{
+  "scripts": {
+    "generate": "tsx scripts/generate.ts",
+    "build": "tsc -p tsconfig.json"
+  }
+}
+```
+
+This still needs care. If `build` watches `generated/**` and `generate` rewrites those files during a watch session, the loop can continue. The difference is that the tasks are now explicit, so you can put `generate` outside the watch lifecycle or run it only once before watch mode starts.
+
+A common pattern is:
+
+```bash
+pnpm turbo run generate
+pnpm turbo run build --watch
+```
+
+## Check `tsconfig.json` and other tool outputs
+
+The same issue appears outside Turborepo when other tools emit files into source directories.
+
+For TypeScript, `outDir` should not point at `src` or any watched source subtree:
+
+```json
+{
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "declarationDir": "dist/types"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}
+```
+
+If `outDir` is set to `src` or `src/generated`, `tsc -w` and `turbo run build --watch` can both re-trigger on emitted files.
+
+The same warning applies to tools like:
+
+- `prisma generate` when output is configured under a watched `src` tree
+- `protoc` codegen with generated files written beside handwritten source
+- CSS preprocessors that emit `.css` next to `.scss` in the same watched path
+- GraphQL or OpenAPI generators that write clients into `src`
+
+When possible, output to a dedicated artifact directory and import from there.
+
+## Troubleshooting the active loop
+
+If the task keeps rebuilding, check which files are changing during the run.
+
+Useful commands:
+
+```bash
+pnpm turbo run build --watch --summarize
+```
+
+```bash
+pnpm turbo run build --filter=@acme/api --dry=json
+```
+
+```bash
+git status --short
+```
+
+`git status` helps confirm whether a generated file is being rewritten repeatedly. If the same file changes on every run, that file is almost certainly inside the task’s watch set.
+
+Also inspect the task config in `turbo.json` and the tool config that writes output. Look for these combinations:
+
+- `inputs` includes `src/**`
+- output path is `src/generated/**`
+- `watch` mode is enabled for the same task
+- a generator rewrites files on every execution, even when content is unchanged
+
+If the build writes timestamps, hashes, or formatted output that changes on every run, the file will always look new to the watcher. In that case, stabilize the generated content or avoid writing when the content has not changed.
+
+A simple content guard helps:
+
+```ts
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+
+async function writeIfChanged(path: string, next: string) {
+  try {
+    const current = await readFile(path, "utf8");
+    if (current === next) return;
+  } catch {
+    // File does not exist yet.
+  }
+
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, next);
+}
+```
+
+That does not replace correct directory layout, but it reduces unnecessary writes.
+
+## Recommended configuration patterns
+
+For most repositories, the simplest stable setup is:
+
+- source in `src/**`
+- generated files in `dist/**` or `generated/**`
+- `turbo.json` inputs limited to handwritten source
+- `turbo.json` outputs matching only derived artifacts
+- no build step writing into `src/**`
+
+Example:
+
+```json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "inputs": ["src/**", "scripts/**", "package.json", "tsconfig.json"],
+      "outputs": ["dist/**"]
+    },
+    "lint": {
+      "inputs": ["src/**", "package.json", "eslint.config.js"]
+    }
+  }
+}
+```
+
+If a package must keep generated files in the package tree, exclude them explicitly from inputs and make sure no other task watches them as source.
+
+## Practical takeaway
+
+Prefer moving generated artifacts out of watched source directories. That prevents the task from re-triggering on its own output and keeps Turborepo hashes stable. If the artifacts must stay in the package tree, exclude the generated path from `inputs` and ensure the generator only writes when content changes.
