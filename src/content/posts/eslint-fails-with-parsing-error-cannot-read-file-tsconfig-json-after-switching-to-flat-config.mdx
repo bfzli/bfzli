@@ -1,0 +1,388 @@
+---
+title: "ESLint Fails with `Parsing error: Cannot read file tsconfig.json` After Switching to Flat Config"
+description: "Explain why ESLint can no longer find the TypeScript project file and how to point the parser at the right path."
+tags: ["eslint", "typescript", "flat-config", "parser", "lint"]
+date: Oct 26, 2026
+cell: "eslint-flat-config-parser-mismatch::eslint::typescript-project"
+---
+
+ESLint fails on the TypeScript parser step with `Parsing error: Cannot read file tsconfig.json` when `@typescript-eslint/parser` tries to load a project file from the wrong location. In a flat config setup, the parser is no longer resolving `parserOptions.project` the same way it did in legacy `.eslintrc` configurations, so a relative `tsconfig.json` path can point at a file that does not exist from ESLint’s current working directory.
+
+## What the error means
+
+The error usually looks like this:
+
+```text
+Parsing error: Cannot read file '/path/to/repo/tsconfig.json'
+```
+
+or, in a monorepo:
+
+```text
+Parsing error: Cannot read file '/path/to/repo/packages/api/tsconfig.json'
+```
+
+The parser is not complaining about TypeScript syntax. It is failing before type-aware linting can start, because it cannot open the file named in `parserOptions.project`.
+
+That file is required when you enable type-aware rules such as `@typescript-eslint/no-unsafe-assignment`, `@typescript-eslint/no-floating-promises`, or `@typescript-eslint/no-misused-promises`. Those rules need a TypeScript `Program`, and the parser builds that `Program` by reading one or more `tsconfig` files.
+
+If the path is wrong, ESLint cannot create the `Program`, and parsing fails.
+
+## Why flat config changes the behavior
+
+Legacy `.eslintrc` resolution and flat config resolution are not the same.
+
+With `.eslintrc`, relative paths in `parserOptions.project` were often resolved in a way that felt tied to the config file location or inherited directory structure. Many setups also relied on `tsconfigRootDir: __dirname` inside a config file, which made a relative `project` path land where expected.
+
+Flat config uses `eslint.config.js` or `eslint.config.mjs` and a different loading model. The config is just JavaScript, so path handling becomes explicit. ESLint does not infer the same root semantics that older setups did. A relative `project: './tsconfig.json'` may be interpreted from the process working directory, not from the location of the config file, unless `tsconfigRootDir` is set correctly.
+
+That means this legacy-style configuration is fragile in flat config:
+
+```ts
+import tseslint from "typescript-eslint";
+
+export default tseslint.config({
+  languageOptions: {
+    parserOptions: {
+      project: "./tsconfig.json",
+    },
+  },
+});
+```
+
+If you run ESLint from a workspace root while the `tsconfig.json` lives elsewhere, or if your config file is in a package subdirectory, the parser may look in the wrong place.
+
+## The direct fix: set `tsconfigRootDir`
+
+The parser should be told where relative `project` paths are rooted. Use `tsconfigRootDir` together with `project`.
+
+A minimal flat config example:
+
+```ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import tseslint from "typescript-eslint";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default tseslint.config({
+  languageOptions: {
+    parserOptions: {
+      project: "./tsconfig.json",
+      tsconfigRootDir: __dirname,
+    },
+  },
+});
+```
+
+This makes `./tsconfig.json` resolve relative to the directory containing `eslint.config.mjs`.
+
+If the config file is in the repository root and the root `tsconfig.json` is also there, this is usually enough.
+
+### Common JS version
+
+If the config is `eslint.config.cjs` or `eslint.config.js` in CommonJS mode:
+
+```js
+const path = require("node:path");
+
+module.exports = [
+  {
+    languageOptions: {
+      parserOptions: {
+        project: "./tsconfig.json",
+        tsconfigRootDir: __dirname,
+      },
+    },
+  },
+];
+```
+
+The point is the same: `project` stays relative, `tsconfigRootDir` defines the base.
+
+## When to use an absolute path instead
+
+An absolute path removes ambiguity. This is often the simplest option when the config file sits in a package directory or when the ESLint working directory changes across scripts and CI.
+
+```ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import tseslint from "typescript-eslint";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default tseslint.config({
+  languageOptions: {
+    parserOptions: {
+      project: path.join(__dirname, "tsconfig.json"),
+    },
+  },
+});
+```
+
+With an absolute path, `tsconfigRootDir` is not strictly necessary for that one file, because the parser does not need to resolve a relative `project` value.
+
+This is useful when:
+
+- the config file is shared across packages
+- ESLint is run from different directories
+- workspace tooling rewrites the process working directory
+
+Relative paths are still fine, but only if `tsconfigRootDir` is correct.
+
+## A working flat config for a single package
+
+For a simple TypeScript project, this is a clean setup:
+
+```ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import tseslint from "typescript-eslint";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default [
+  ...tseslint.configs.recommendedTypeChecked,
+  {
+    files: ["**/*.ts", "**/*.tsx"],
+    languageOptions: {
+      parserOptions: {
+        project: "./tsconfig.json",
+        tsconfigRootDir: __dirname,
+      },
+    },
+  },
+];
+```
+
+This assumes:
+
+- `eslint.config.mjs` is in the same directory as `tsconfig.json`
+- the project includes the TypeScript files you want to lint
+- the `recommendedTypeChecked` preset is in use, or a similar type-aware preset
+
+If `eslint.config.mjs` is not at the same level as `tsconfig.json`, adjust the `project` path accordingly.
+
+## Monorepo setups need explicit project selection
+
+The most common source of this error is a monorepo where multiple `tsconfig` files exist.
+
+Example layout:
+
+```text
+repo/
+  eslint.config.mjs
+  tsconfig.base.json
+  packages/
+    api/
+      tsconfig.json
+      src/
+    web/
+      tsconfig.json
+      src/
+```
+
+If the root config says `project: "./tsconfig.json"`, the parser may try to read `repo/tsconfig.json` even though the actual project file is `repo/packages/api/tsconfig.json`. That leads to the exact error about not being able to read the file.
+
+### Option 1: separate configs per package
+
+This is the most precise approach. Point each file group at the matching project.
+
+```ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import tseslint from "typescript-eslint";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default [
+  {
+    files: ["packages/api/**/*.ts"],
+    languageOptions: {
+      parserOptions: {
+        project: "./packages/api/tsconfig.json",
+        tsconfigRootDir: __dirname,
+      },
+    },
+  },
+  {
+    files: ["packages/web/**/*.ts"],
+    languageOptions: {
+      parserOptions: {
+        project: "./packages/web/tsconfig.json",
+        tsconfigRootDir: __dirname,
+      },
+    },
+  },
+];
+```
+
+This avoids loading the wrong project file and keeps type-aware linting aligned with each package’s compiler options.
+
+### Option 2: use `project` with multiple entries
+
+If one lint run covers multiple packages, `project` can be an array.
+
+```ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default [
+  {
+    files: ["packages/**/*.{ts,tsx}"],
+    languageOptions: {
+      parserOptions: {
+        project: [
+          "./packages/api/tsconfig.json",
+          "./packages/web/tsconfig.json",
+        ],
+        tsconfigRootDir: __dirname,
+      },
+    },
+  },
+];
+```
+
+This works when the parser needs to understand multiple TypeScript programs. It is more expensive than a single project because the parser may have to create and manage more than one `Program`.
+
+### Option 3: use a dedicated lint `tsconfig`
+
+Some monorepos use a `tsconfig.eslint.json` or `tsconfig.lint.json` that extends a package or base config and includes only linted files.
+
+```json
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/**/*.ts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
+}
+```
+
+Then the ESLint config points at that file:
+
+```ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default [
+  {
+    files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+    languageOptions: {
+      parserOptions: {
+        project: "./tsconfig.eslint.json",
+        tsconfigRootDir: __dirname,
+      },
+    },
+  },
+];
+```
+
+This is useful when the normal build `tsconfig` excludes test files or generated sources that still need linting.
+
+## How to avoid loading the wrong project file
+
+The error is not only about missing files. It also appears when the parser finds a `tsconfig.json`, but it is the wrong one for the files being linted.
+
+That matters because the TypeScript parser validates files against the selected program. If a source file is outside the `include` set of the chosen `tsconfig`, you can see parser failures or missing type information.
+
+To prevent that:
+
+- set `files` globs in flat config so each block only applies to matching source files
+- set `project` to the exact `tsconfig` for that file set
+- use `tsconfigRootDir` so relative project paths are stable
+- avoid pointing all packages at a single root `tsconfig` unless that config actually includes all linted files
+
+In a monorepo, a root `tsconfig.base.json` is often not enough. It is usually extended by package-specific configs, but it may not itself be a valid parser project because it only contains shared compiler options and no `include`.
+
+## Diagnostic commands
+
+If the path is uncertain, verify what ESLint is loading.
+
+Run ESLint with debug output:
+
+```sh
+DEBUG=typescript-eslint:* npx eslint packages/api/src/index.ts
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:DEBUG="typescript-eslint:*"; npx eslint packages/api/src/index.ts
+```
+
+This can show which `tsconfig` path the parser attempts to load.
+
+Also verify the file exists from the config directory:
+
+```sh
+node -e "const path=require('node:path'); console.log(path.resolve('packages/api/tsconfig.json'))"
+```
+
+If the resolved path is not the file you expect, fix `tsconfigRootDir` or the `project` string.
+
+## A complete monorepo example
+
+This example uses an `eslint.config.mjs` at the repository root and separate package projects.
+
+```ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import tseslint from "typescript-eslint";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default [
+  ...tseslint.configs.recommendedTypeChecked,
+  {
+    files: ["packages/api/**/*.{ts,tsx}"],
+    languageOptions: {
+      parserOptions: {
+        project: "./packages/api/tsconfig.eslint.json",
+        tsconfigRootDir: __dirname,
+      },
+    },
+  },
+  {
+    files: ["packages/web/**/*.{ts,tsx}"],
+    languageOptions: {
+      parserOptions: {
+        project: "./packages/web/tsconfig.eslint.json",
+        tsconfigRootDir: __dirname,
+      },
+    },
+  },
+];
+```
+
+And a package lint config:
+
+```json
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["dist", "node_modules"]
+}
+```
+
+This keeps the parser anchored to the repository root while still choosing the correct project file for each package.
+
+## Practical takeaway
+
+Prefer an explicit `project` path plus `tsconfigRootDir` in flat config, and use per-package `tsconfig` files in a monorepo. That combination makes parser resolution deterministic and prevents ESLint from reading the wrong `tsconfig.json`. If a relative path is still used, it should only be because `tsconfigRootDir` is set to the directory that actually contains that project file.
