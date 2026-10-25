@@ -38,16 +38,16 @@ export const products: Venture[] = [
         description: 'Environment variables, without the mess.',
         icon: envless,
         url: 'https://envless.cloud'
-    }
-]
-
-export const vibeCoded: Venture[] = [
+    },
     {
         name: 'Ip2Geo',
         description: "Programmatically convert IP's into GEO location data.",
         icon: ip2geo,
         url: 'https://ip2geo.dev'
-    },
+    }
+]
+
+export const vibeCoded: Venture[] = [
     {
         name: 'Wallpapppers',
         description: 'The next-generation wallpaper platform powered by AI.',
