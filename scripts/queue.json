@@ -2,20 +2,6 @@
     "generatedAt": "2026-10-25T22:08:28.258Z",
     "ideas": [
         {
-            "cell": "cloudflare-workers-stream-consumed::cloudflare-workers::request-body-clone",
-            "title": "Cloudflare Workers Reject a Second Read with `TypeError: body used already` After `request.text()`",
-            "description": "Fix Workers handlers that consume a request body twice and learn when to clone or cache the parsed data.",
-            "tags": [
-                "cloudflare-workers",
-                "fetch",
-                "request-body",
-                "javascript",
-                "edge"
-            ],
-            "angle": "Open with the exact `body used already` error and the second read that triggers it. Explain the Fetch request stream model: once a body is consumed, it cannot be read again unless you clone the request or preserve the parsed result. Show how to structure middleware and validation so the body is read once and reused safely.",
-            "slug": "cloudflare-workers-reject-a-second-read-with-typeerror-body-used-already-after-request-text"
-        },
-        {
             "cell": "deno-node-prefix-resolution::deno::npm-specifier-lookup",
             "title": "Deno Fails to Resolve an npm Package Imported Without the `npm:` Prefix",
             "description": "Show why Deno treats bare npm specifiers differently and how to import packages with the right resolver rules.",
@@ -87,19 +73,19 @@
     ],
     "drafted": [
         {
-            "cell": "eslint-flat-config-parser-mismatch::eslint::typescript-project",
-            "title": "ESLint Fails with `Parsing error: Cannot read file tsconfig.json` After Switching to Flat Config",
-            "description": "Explain why ESLint can no longer find the TypeScript project file and how to point the parser at the right path.",
+            "cell": "cloudflare-workers-stream-consumed::cloudflare-workers::request-body-clone",
+            "title": "Cloudflare Workers Reject a Second Read with `TypeError: body used already` After `request.text()`",
+            "description": "Fix Workers handlers that consume a request body twice and learn when to clone or cache the parsed data.",
             "tags": [
-                "eslint",
-                "typescript",
-                "flat-config",
-                "parser",
-                "lint"
+                "cloudflare-workers",
+                "fetch",
+                "request-body",
+                "javascript",
+                "edge"
             ],
-            "angle": "Open with the parser error and the config file path ESLint is trying to read. Explain how flat config changes resolution rules, so `parserOptions.project` no longer behaves like it did in legacy config setups. Show the corrected absolute or relative paths, the working `tsconfigRootDir`, and how to avoid loading the wrong project file in a monorepo.",
-            "slug": "eslint-fails-with-parsing-error-cannot-read-file-tsconfig-json-after-switching-to-flat-config",
-            "draftedAt": "2026-10-25T23:42:08.236Z"
+            "angle": "Open with the exact `body used already` error and the second read that triggers it. Explain the Fetch request stream model: once a body is consumed, it cannot be read again unless you clone the request or preserve the parsed result. Show how to structure middleware and validation so the body is read once and reused safely.",
+            "slug": "cloudflare-workers-reject-a-second-read-with-typeerror-body-used-already-after-request-text",
+            "draftedAt": "2026-10-27T01:01:43.622Z"
         }
     ]
 }
