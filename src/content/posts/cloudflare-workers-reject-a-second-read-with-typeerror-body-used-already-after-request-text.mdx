@@ -1,0 +1,375 @@
+---
+title: "Cloudflare Workers Reject a Second Read with `TypeError: body used already` After `request.text()`"
+description: "Fix Workers handlers that consume a request body twice and learn when to clone or cache the parsed data."
+tags: ["cloudflare-workers", "fetch", "request-body", "javascript", "edge"]
+date: Oct 27, 2026
+cell: "cloudflare-workers-stream-consumed::cloudflare-workers::request-body-clone"
+---
+
+`request.text()` consumes the request body in a Cloudflare Worker, and a second read of the same `Request` fails with `TypeError: body used already`.
+
+## What the error means
+
+Cloudflare Workers implement the Fetch API request body as a one-shot `ReadableStream`. When code calls `await request.text()`, `await request.json()`, `await request.formData()`, or `await request.arrayBuffer()`, the underlying stream is drained. A later attempt to read that same body again triggers the runtime error:
+
+```text
+TypeError: body used already
+```
+
+This is not specific to `request.text()`. The same failure appears if one part of the handler parses JSON and another part later tries to parse the same request again, or if middleware reads the body before the route handler does.
+
+The key rule is simple: a `Request` body can be consumed once. If you need the bytes more than once, you must either clone the request before reading it or read it once and reuse the parsed result.
+
+## Why Fetch request bodies are single-use
+
+The Fetch standard models request and response bodies as streams. A stream can be consumed only once unless it is explicitly duplicated. That design avoids buffering large payloads automatically and keeps streaming semantics consistent across browsers and edge runtimes.
+
+In Workers, the `Request` object exposes methods that consume the body:
+
+- `request.text()`
+- `request.json()`
+- `request.arrayBuffer()`
+- `request.formData()`
+- `request.blob()`
+
+Each of these reads the same underlying stream. After one of them runs, the body is marked as used. A later call on the same `Request` instance fails.
+
+This also affects helpers that hide the read. If a validation layer calls `await request.json()` and a business-logic layer later calls `await request.json()` again, the second call is the one that throws.
+
+## A minimal reproduction
+
+This Worker reads the body twice:
+
+```typescript
+export default {
+  async fetch(request: Request): Promise<Response> {
+    const first = await request.text();
+    const second = await request.text();
+
+    return new Response(JSON.stringify({ first, second }), {
+      headers: { "content-type": "application/json" },
+    });
+  },
+};
+```
+
+Run it with Wrangler:
+
+```bash
+npm create cloudflare@latest my-worker
+cd my-worker
+npm install
+npx wrangler dev
+```
+
+Send a request:
+
+```bash
+curl -X POST http://127.0.0.1:8787 \
+  -H 'content-type: text/plain' \
+  --data 'hello'
+```
+
+The first `request.text()` succeeds. The second one throws `TypeError: body used already`.
+
+The same happens with `request.json()`:
+
+```typescript
+export default {
+  async fetch(request: Request): Promise<Response> {
+    const a = await request.json();
+    const b = await request.json();
+
+    return Response.json({ a, b });
+  },
+};
+```
+
+The payload never reaches the second parse. The error occurs because the body stream has already been consumed.
+
+## Why middleware triggers this so often
+
+A common Workers structure splits work into middleware and a final handler. Middleware often validates authentication, parses input, logs payloads, or computes signatures. Any of those steps can consume the body.
+
+For example:
+
+```typescript
+type Context = {
+  request: Request;
+  json?: unknown;
+};
+
+async function validateJson(ctx: Context): Promise<void> {
+  const payload = await ctx.request.json();
+  if (typeof payload !== "object" || payload === null) {
+    throw new Response("invalid JSON", { status: 400 });
+  }
+  ctx.json = payload;
+}
+
+async function handle(ctx: Context): Promise<Response> {
+  const data = await ctx.request.json();
+  return Response.json({ data });
+}
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    const ctx: Context = { request };
+    await validateJson(ctx);
+    return handle(ctx);
+  },
+};
+```
+
+`validateJson()` consumes the body first. `handle()` then tries to consume it again and fails.
+
+The issue is not middleware itself. The issue is duplicating body reads across layers that each treat the `Request` as if it were still untouched.
+
+## Prefer reading once and passing the parsed value
+
+The most reliable fix is to read the body once at the boundary and pass the parsed value through the rest of the request pipeline.
+
+```typescript
+type CreateUserInput = {
+  email: string;
+  password: string;
+};
+
+async function parseCreateUser(request: Request): Promise<CreateUserInput> {
+  const value: unknown = await request.json();
+
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as Record<string, unknown>).email !== "string" ||
+    typeof (value as Record<string, unknown>).password !== "string"
+  ) {
+    throw new Response("invalid payload", { status: 400 });
+  }
+
+  return value as CreateUserInput;
+}
+
+async function createUser(input: CreateUserInput): Promise<Response> {
+  return Response.json({
+    ok: true,
+    email: input.email,
+  });
+}
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    const input = await parseCreateUser(request);
+    return createUser(input);
+  },
+};
+```
+
+Here the request body is consumed once. The parsed object becomes the shared input for downstream functions. No later layer needs to touch the `Request` again.
+
+This pattern is usually the cleanest option because it keeps parsing, validation, and business logic separated without duplicating stream reads.
+
+## Clone the request when multiple consumers truly need the body
+
+If two independent consumers need access to the raw body bytes, you can duplicate the stream before either consumer reads it by calling `request.clone()`.
+
+```typescript
+export default {
+  async fetch(request: Request): Promise<Response> {
+    const copy = request.clone();
+
+    const raw = await request.text();
+    const json = await copy.json();
+
+    return Response.json({ raw, json });
+  },
+};
+```
+
+`clone()` creates a second `Request` with its own readable stream. Both copies can be consumed once. This works because the runtime tees the underlying stream.
+
+There is still a cost. Cloning can increase memory use and may buffer data if both branches do not read at the same pace. For small request bodies, this is usually acceptable. For larger uploads, cloning is best avoided unless the duplication is actually required.
+
+Use `clone()` when you need both:
+
+- the raw body for logging, hashing, or signature verification
+- the parsed body for application logic
+
+If you only need the parsed data, cloning is unnecessary overhead.
+
+## Cache the parsed result on the request context
+
+Workers do not have framework-level request context built in, but a handler can attach parsed data to a local object and pass that object through every layer.
+
+```typescript
+type RequestContext = {
+  request: Request;
+  body?: unknown;
+};
+
+async function loadBody(ctx: RequestContext): Promise<void> {
+  if (ctx.body === undefined) {
+    ctx.body = await ctx.request.json();
+  }
+}
+
+async function requireUser(ctx: RequestContext): Promise<{ userId: string }> {
+  await loadBody(ctx);
+
+  const body = ctx.body;
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    typeof (body as Record<string, unknown>).userId !== "string"
+  ) {
+    throw new Response("missing userId", { status: 400 });
+  }
+
+  return { userId: (body as Record<string, unknown>).userId };
+}
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    const ctx: RequestContext = { request };
+    const user = await requireUser(ctx);
+
+    return Response.json({ user });
+  },
+};
+```
+
+This keeps the body read lazy and idempotent within the request pipeline. The first call reads and stores the parsed data. Later calls reuse the stored value instead of touching the stream again.
+
+This pattern is useful when several helper functions may need the same input, but only one should perform the actual parse.
+
+## Be careful with logging and debugging
+
+A very common trigger is request logging middleware. This pattern looks harmless:
+
+```typescript
+async function logBody(request: Request): Promise<void> {
+  console.log(await request.text());
+}
+```
+
+If a later handler needs JSON, the second read fails.
+
+The same risk exists with debug helpers that print the body before validation, or signature verification code that calls `request.text()` to compute an HMAC and then passes the same `Request` to a JSON parser.
+
+If the body is needed for both logging and logic, capture it once and share the result:
+
+```typescript
+type BodyCapture = {
+  raw: string;
+  parsed: unknown;
+};
+
+async function captureBody(request: Request): Promise<BodyCapture> {
+  const raw = await request.text();
+  const parsed = JSON.parse(raw) as unknown;
+
+  return { raw, parsed };
+}
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    const body = await captureBody(request);
+
+    console.log(body.raw);
+
+    return Response.json(body.parsed);
+  },
+};
+```
+
+This works because `JSON.parse()` operates on the already captured string, not on the stream.
+
+## Validation libraries can hide the second read
+
+Schema validators often accept plain objects, but some integrations read the body internally before validation. If you use a helper that accepts a `Request` directly, check whether it consumes the body.
+
+A safe pattern is:
+
+1. read the body once
+2. parse it into a plain value
+3. pass that value to the validator
+
+```typescript
+import { z } from "zod";
+
+const schema = z.object({
+  email: z.string().email(),
+  age: z.number().int().min(18),
+});
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    const data: unknown = await request.json();
+    const result = schema.safeParse(data);
+
+    if (!result.success) {
+      return Response.json(
+        { error: "invalid input", issues: result.error.issues },
+        { status: 400 },
+      );
+    }
+
+    return Response.json({ ok: true, data: result.data });
+  },
+};
+```
+
+If a validator or middleware library exposes a helper that takes a `Request`, inspect whether it calls `json()`, `text()`, or `formData()` internally. The body must still be read only once overall.
+
+## A safe structure for Workers handlers
+
+A simple handler pipeline helps prevent accidental double reads:
+
+```typescript
+type HandlerContext<T> = {
+  request: Request;
+  body: T;
+};
+
+async function withJsonBody<T>(
+  request: Request,
+  handler: (ctx: HandlerContext<T>) => Promise<Response>,
+): Promise<Response> {
+  const body = await request.json() as T;
+  return handler({ request, body });
+}
+
+async function route(ctx: HandlerContext<{ name: string }>): Promise<Response> {
+  if (typeof ctx.body !== "object" || ctx.body === null) {
+    return new Response("bad request", { status: 400 });
+  }
+
+  return Response.json({ hello: ctx.body.name });
+}
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    if (request.method !== "POST") {
+      return new Response("method not allowed", { status: 405 });
+    }
+
+    return withJsonBody<{ name: string }>(request, route);
+  },
+};
+```
+
+The parse happens once in `withJsonBody()`. Downstream code gets a plain object and never needs the original stream.
+
+This is the general shape to aim for in Workers codebases that use middleware, routers, or composable handlers.
+
+## When to choose each fix
+
+Use body caching when you need the parsed payload in more than one place within the same request pipeline. That is the most common case.
+
+Use `request.clone()` only when two consumers need the same raw request body independently. That includes cases where one consumer needs raw bytes and another needs parsed data, or where separate branches truly cannot share a parsed object.
+
+Avoid repeated `request.text()` or `request.json()` calls on the same `Request`. If a helper accepts a `Request`, confirm whether it is already consuming the body. If it is, make the helper return the parsed value or attach it to a shared context object.
+
+## Practical takeaway
+
+Prefer a single body read at the edge of the request pipeline, then reuse the parsed result everywhere else. Use `request.clone()` only when you genuinely need two independent reads of the raw stream. That keeps `TypeError: body used already` from appearing when middleware, validation, logging, and handlers all need access to the same request data.
