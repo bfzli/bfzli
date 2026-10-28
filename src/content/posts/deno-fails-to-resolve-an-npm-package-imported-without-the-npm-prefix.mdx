@@ -1,0 +1,333 @@
+---
+title: "Deno Fails to Resolve an npm Package Imported Without the `npm:` Prefix"
+description: "Show why Deno treats bare npm specifiers differently and how to import packages with the right resolver rules."
+tags: ["deno", "npm", "module-resolution", "import-maps"]
+date: Oct 28, 2026
+cell: "deno-node-prefix-resolution::deno::npm-specifier-lookup"
+---
+
+Deno fails to resolve `chalk` imported as a bare package specifier with:
+
+```text
+error: Could not resolve "chalk" from file:///path/to/main.ts
+```
+
+That error appears when Deno sees `import chalk from "chalk";` and tries to resolve `chalk` as a URL-style module specifier instead of an npm package. In Deno, that distinction is explicit: URL imports, npm compatibility imports, and lockfile-based resolution follow different rules.
+
+## Why bare package specifiers fail in Deno
+
+Deno’s native module loader is URL-first. A specifier like `./mod.ts`, `../lib.ts`, or `https://deno.land/x/...` fits Deno’s default resolver model because it can map the specifier directly to a file or URL.
+
+A bare specifier like `chalk`, `react`, or `lodash` is different. In Node.js, bare specifiers are resolved through `node_modules` lookup and package metadata. Deno does not automatically treat every bare specifier as a Node package name. It only does that when the specifier is explicitly marked as an npm dependency.
+
+That is why this code fails:
+
+```ts
+import chalk from "chalk";
+
+console.log(chalk.green("ok"));
+```
+
+Deno does not know whether `chalk` should be fetched from a URL, resolved from a local file, or handled through the npm compatibility layer. Without the `npm:` prefix, the resolver does not enter npm mode, so resolution stops with an import error.
+
+## URL imports, npm compatibility, and resolution modes
+
+Deno supports multiple module sources, but each one has its own rules.
+
+### URL imports
+
+These are direct references to modules by URL:
+
+```ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+```
+
+This path is resolved by fetching the URL and caching the result locally. The import path itself identifies the source.
+
+### File-relative imports
+
+These are local files:
+
+```ts
+import { helper } from "./helper.ts";
+```
+
+These resolve relative to the current module, just like standard ES modules.
+
+### npm compatibility imports
+
+These must be marked explicitly with `npm:`:
+
+```ts
+import chalk from "npm:chalk@5";
+```
+
+That prefix tells Deno to delegate resolution to the npm compatibility layer. Deno then applies package.json semantics, package exports, npm tarball fetching, and Node-style dependency graph rules.
+
+Without `npm:`, Deno treats the specifier as an unresolved bare module identifier, not as an npm package request.
+
+## The exact fix: use `npm:` in the import specifier
+
+The direct fix is to change the import from:
+
+```ts
+import chalk from "chalk";
+```
+
+to:
+
+```ts
+import chalk from "npm:chalk@5";
+```
+
+If the package has a default export, that form works as expected. If the package uses named exports, import those by name.
+
+Example with `zod`:
+
+```ts
+import { z } from "npm:zod@3.23.8";
+
+const schema = z.object({
+  name: z.string(),
+});
+
+console.log(schema.parse({ name: "deno" }));
+```
+
+Example with `lodash-es` style usage is similar, though package compatibility depends on the package’s own export map and runtime assumptions.
+
+The version pin is important. `npm:chalk@5` tells Deno which package version to resolve and cache. You can omit the version in some cases, but pinning avoids ambiguous resolution and makes lockfile behavior predictable.
+
+## What Deno does after it sees `npm:`
+
+When Deno encounters `npm:chalk@5`, it no longer uses the URL/file resolver path. Instead, it goes through npm resolution logic:
+
+1. It identifies the package name and version.
+2. It reads the package metadata, including `package.json` and export maps.
+3. It resolves transitive npm dependencies.
+4. It downloads and caches the package contents.
+5. It records the resolved graph in the lockfile if one is enabled.
+
+That is why the same package can fail as `chalk` but succeed as `npm:chalk@5`. The prefix changes the resolver path entirely.
+
+## How `deno.json` can make the import stable
+
+You can configure npm dependencies in `deno.json` so the package is declared once and imported consistently across the codebase.
+
+A minimal `deno.json` looks like this:
+
+```json
+{
+  "imports": {
+    "chalk": "npm:chalk@5.3.0"
+  }
+}
+```
+
+Then the code can import the bare alias `chalk`:
+
+```ts
+import chalk from "chalk";
+
+console.log(chalk.blue("ready"));
+```
+
+In this setup, `chalk` is no longer an unresolved bare specifier. Deno first consults the import map in `deno.json`, sees that `chalk` maps to `npm:chalk@5.3.0`, and then resolves it through npm compatibility rules.
+
+This is the preferred approach when the same package is used in multiple files. It keeps the package version centralized and avoids repeating the full `npm:` specifier everywhere.
+
+## Alternative `deno.json` forms for npm packages
+
+You can also express imports in a more explicit way by mapping the package under a project alias:
+
+```json
+{
+  "imports": {
+    "@deps/chalk": "npm:chalk@5.3.0"
+  }
+}
+```
+
+Then:
+
+```ts
+import chalk from "@deps/chalk";
+```
+
+This avoids name collisions if the project also uses a local module named `chalk` or if you want a namespace for all npm packages.
+
+You can also use package aliases for multiple dependencies:
+
+```json
+{
+  "imports": {
+    "@deps/chalk": "npm:chalk@5.3.0",
+    "@deps/zod": "npm:zod@3.23.8"
+  }
+}
+```
+
+This still resolves through npm, but the application code no longer depends on raw package names.
+
+## Why the lockfile matters
+
+Deno’s lockfile records resolved module integrity and exact dependency URLs or package references. For npm packages, that means the lockfile helps keep the graph consistent across machines and runs.
+
+If you use a lockfile, Deno can reuse cached resolution data and avoid drifting dependency graphs. If the import is not declared correctly as `npm:`, the lockfile cannot help because there is no valid npm resolution to record in the first place.
+
+A typical workflow is:
+
+```bash
+deno cache --lock=deno.lock --lock-write main.ts
+```
+
+Then run your program with the same lockfile:
+
+```bash
+deno run --lock=deno.lock main.ts
+```
+
+If the project uses `deno.json`, the same applies when the config references npm dependencies. The lockfile captures the resolved package tree so future runs keep the same versions and integrity values.
+
+## When you need a permission flag
+
+Most npm resolution failures are not permission-related, but cache population and package fetching can require network access the first time.
+
+If Deno cannot download the package, it will fail during resolution or execution. In that case, allow network access:
+
+```bash
+deno run --allow-net main.ts
+```
+
+For an application that depends on npm packages, a more explicit prefetch step is often cleaner:
+
+```bash
+deno cache main.ts
+```
+
+or, with a lockfile:
+
+```bash
+deno cache --lock=deno.lock --lock-write main.ts
+```
+
+If the package is already cached and the lockfile is present, subsequent runs may not need network access. But the initial cache population does. If you are in a restricted environment, prefetching dependencies before runtime is the mechanism that prevents resolution failures caused by missing package data.
+
+## Example project layout
+
+A minimal project using a locked npm dependency can look like this:
+
+`deno.json`
+
+```json
+{
+  "imports": {
+    "chalk": "npm:chalk@5.3.0"
+  },
+  "lock": "deno.lock"
+}
+```
+
+`main.ts`
+
+```ts
+import chalk from "chalk";
+
+console.log(chalk.green("ok"));
+```
+
+Install and resolve:
+
+```bash
+deno cache --lock=deno.lock --lock-write main.ts
+```
+
+Run:
+
+```bash
+deno run --lock=deno.lock main.ts
+```
+
+If you want the package imported directly without an import map, use the explicit specifier instead:
+
+```ts
+import chalk from "npm:chalk@5.3.0";
+
+console.log(chalk.green("ok"));
+```
+
+That works without a `deno.json` import alias, though the version string is then repeated in code.
+
+## Common failure patterns
+
+### Importing a package as if Deno were Node
+
+This fails:
+
+```ts
+import express from "express";
+```
+
+It fails for the same reason as `chalk`: the bare specifier is not automatically an npm package in Deno.
+
+Use:
+
+```ts
+import express from "npm:express@4.21.2";
+```
+
+or declare it in `deno.json`:
+
+```json
+{
+  "imports": {
+    "express": "npm:express@4.21.2"
+  }
+}
+```
+
+### Mixing URL imports and npm imports without a config
+
+This is valid:
+
+```ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import chalk from "npm:chalk@5.3.0";
+```
+
+But if the same package is imported as bare `chalk` in another file without an import map, resolution will fail there. Each bare specifier must be mapped consistently.
+
+### Assuming `deno run` will infer npm packages
+
+Deno does not guess that `import x from "package-name";` means npm. The package must be declared through `npm:` or mapped via `deno.json`.
+
+## Recommended setup
+
+For a small script, the simplest working form is the explicit import:
+
+```ts
+import chalk from "npm:chalk@5.3.0";
+```
+
+For a project with multiple files, prefer `deno.json` import mapping:
+
+```json
+{
+  "imports": {
+    "chalk": "npm:chalk@5.3.0"
+  },
+  "lock": "deno.lock"
+}
+```
+
+Then resolve and write the lockfile once:
+
+```bash
+deno cache --lock=deno.lock --lock-write main.ts
+```
+
+If the environment needs the package downloaded up front, add the network permission for the resolution step or pre-cache dependencies before running under restricted permissions.
+
+## Practical takeaway
+
+Prefer `npm:` specifiers for direct imports and `deno.json` import maps for reusable project-wide aliases. That is the mechanism Deno requires to treat a bare package name as an npm dependency. Pair it with a lockfile so the resolved package tree stays stable, and pre-cache or allow network access during the first resolution so the package can actually be fetched.
