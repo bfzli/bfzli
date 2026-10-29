@@ -1,0 +1,346 @@
+---
+title: "Remix Loses Session Cookies on a Cross-Site Callback Because `SameSite` Blocks the Cookie"
+description: "Explain why a Remix session cookie disappears on a third-party redirect and how to set cookie attributes correctly."
+tags: ["remix", "cookies", "sessions", "same-site", "auth"]
+date: Oct 29, 2026
+cell: "remix-session-cookie-samesite::remix::cross-site-session-callback"
+---
+
+The callback route cannot read the session cookie after the redirect, and the server returns `Error: Session not found` or `TypeError: Cannot read properties of null` when it expects session data that is no longer present.
+
+## Why the cookie disappears on the callback
+
+A Remix session usually relies on an HTTP cookie set by `createCookieSessionStorage` or a custom session storage adapter. The browser decides whether to send that cookie on each request. When the request is part of a cross-site navigation, cookie rules apply before Remix sees anything.
+
+The key attribute is `SameSite`.
+
+`SameSite=Lax` allows a cookie on top-level navigations that use safe methods, mainly `GET`. It does not allow the cookie on many cross-site subrequests, but it does allow the cookie to be sent when the browser follows a normal redirect back to your app as a top-level `GET` navigation. This is why `Lax` often works for OAuth-style callbacks that land on a `GET` route.
+
+`SameSite=Strict` is more restrictive. The browser withholds the cookie when navigation originates from another site, even if the final request is a top-level `GET`. A third-party identity provider, payment provider, or any external callback flow will not receive the cookie on the return trip.
+
+`SameSite=None` tells the browser to send the cookie in cross-site contexts. Modern browsers require `Secure` when `SameSite=None` is used. Without `Secure`, the cookie is rejected or ignored.
+
+That means the callback route breaks when the browser does not attach the session cookie to the request. Remix then creates a new empty session, and any code that expects the prior session state fails.
+
+## How browser cookie rules affect cross-site redirects
+
+The browser decides whether to include cookies using three main inputs:
+
+- the destination site
+- the request context
+- the `SameSite` value
+
+A cross-site redirect means the request that reaches your app was initiated from a different site. Common examples are:
+
+- OAuth authorization code callbacks
+- SAML response posts
+- payment provider return URLs
+- third-party login or consent pages
+
+For these flows:
+
+- `SameSite=Strict` blocks the cookie
+- `SameSite=Lax` usually allows the cookie on top-level `GET` callbacks, but not on `POST` callbacks or embedded contexts
+- `SameSite=None; Secure` allows the cookie across sites
+
+If your callback endpoint uses `POST`, `Lax` will not help. If the provider returns via `GET`, `Lax` often works, but only if the browser considers the navigation a top-level navigation and the cookie has not been filtered by other policies.
+
+There is one more constraint: cookies with `SameSite=None` must also be `Secure`. That means they are only sent over `https://` origins, except that `localhost` is treated specially by some browsers during development, but not all deployment topologies behave the same way. For portable behavior, use `https` in environments where the cookie must survive a cross-site callback.
+
+## Remix session storage and cookie attributes
+
+In Remix, session storage is usually created with `createCookieSessionStorage` from `@remix-run/node`. The cookie attributes are defined in the storage config, not on each route.
+
+A typical session storage setup looks like this:
+
+```ts
+// app/session.server.ts
+import { createCookieSessionStorage } from "@remix-run/node";
+
+export const sessionStorage = createCookieSessionStorage({
+  cookie: {
+    name: "__session",
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    secure: process.env.NODE_ENV === "production",
+    secrets: [process.env.SESSION_SECRET ?? "dev-secret"],
+  },
+});
+
+export const { getSession, commitSession, destroySession } =
+  sessionStorage;
+```
+
+That configuration is fine for many same-site flows. It is not sufficient for a callback that returns from a separate site and uses a `POST`, or for any integration that requires the cookie to survive a cross-site context that `Lax` does not cover.
+
+If the callback must read the same session cookie after leaving your site, use `sameSite: "none"` and `secure: true`:
+
+```ts
+// app/session.server.ts
+import { createCookieSessionStorage } from "@remix-run/node";
+
+const isProduction = process.env.NODE_ENV === "production";
+
+export const sessionStorage = createCookieSessionStorage({
+  cookie: {
+    name: "__session",
+    httpOnly: true,
+    sameSite: "none",
+    secure: true,
+    path: "/",
+    secrets: [process.env.SESSION_SECRET ?? "dev-secret"],
+  },
+});
+```
+
+This is the browser-compatible form for third-party return flows. The browser will only accept it over HTTPS.
+
+## Choosing between `Lax`, `Strict`, and `None`
+
+Use the least permissive setting that still supports the flow.
+
+### `SameSite=Strict`
+
+Use this when the cookie should never be sent from a cross-site navigation. This is appropriate for highly sensitive sessions where the app never needs a third-party callback to read the same cookie.
+
+It blocks:
+
+- OAuth callback reads
+- payment provider return flows
+- external login redirects
+
+It is the safest option from a CSRF perspective, but it breaks cross-site return flows by design.
+
+### `SameSite=Lax`
+
+Use this when the session should work on normal top-level navigation, including a typical `GET` redirect back to your app.
+
+It usually supports:
+
+- `GET` callback routes
+- direct navigation
+- internal app links
+
+It does not support:
+
+- cross-site `POST` callbacks
+- iframe or embedded contexts
+- flows that require the cookie on a non-navigation request
+
+This is the default choice for many Remix apps because it balances usability and CSRF protection.
+
+### `SameSite=None; Secure`
+
+Use this when the browser must send the cookie in a cross-site context.
+
+It supports:
+
+- OAuth flows that need the session on return
+- cross-site `POST` callbacks
+- third-party identity and payment flows that depend on the existing session
+
+It requires HTTPS in production. Browsers reject `SameSite=None` cookies without `Secure`.
+
+## What the callback route should do
+
+The callback route should read the existing session, validate the provider response, update the session, and commit the cookie back to the browser.
+
+A basic Remix action or loader example:
+
+```ts
+// app/routes/auth.callback.tsx
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import { redirect } from "@remix-run/node";
+import { commitSession, getSession } from "~/session.server";
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  const cookieHeader = request.headers.get("Cookie");
+  const session = await getSession(cookieHeader);
+
+  const pendingState = session.get("oauth_state");
+  if (!pendingState) {
+    throw new Response("Session not found", { status: 400 });
+  }
+
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+
+  if (!code || !state || state !== pendingState) {
+    throw new Response("Invalid callback", { status: 400 });
+  }
+
+  session.unset("oauth_state");
+  session.set("userId", "123");
+
+  return redirect("/dashboard", {
+    headers: {
+      "Set-Cookie": await commitSession(session),
+    },
+  });
+}
+```
+
+If `request.headers.get("Cookie")` is empty or does not include `__session`, the problem is not in the callback code. The browser did not send the cookie.
+
+That is the important distinction. Remix is reading whatever the browser provides. If the cookie is absent, changing loader logic will not fix it.
+
+## When to use `Secure`
+
+`Secure` tells the browser to send the cookie only over HTTPS. For session cookies, that is the normal production setting.
+
+Use `secure: true` when:
+
+- the app is deployed on HTTPS
+- the cookie may be used in a cross-site flow with `SameSite=None`
+- the session contains authentication state
+
+Do not disable `Secure` in production to make a callback work. That weakens transport security and does not address the real browser rule. If `SameSite=None` is needed, `Secure` is mandatory.
+
+For local development, there are two common approaches:
+
+1. keep `sameSite: "lax"` locally if the callback uses a top-level `GET` and works under `localhost`
+2. run local HTTPS so you can test `sameSite: "none"` exactly as production will use it
+
+The second option is more accurate for providers that require `None`.
+
+## How to keep local development working
+
+Local development often breaks because the browser behaves differently on plain `http://localhost` than on deployed HTTPS, and because third-party flows may redirect to `http://127.0.0.1` or another origin that does not match your cookie scope.
+
+Use these practices:
+
+- keep cookie `path: "/"` unless you intentionally scope it tighter
+- make the session cookie name stable, such as `__session`
+- run local HTTPS when testing `SameSite=None`
+- make sure the provider callback URL matches the exact origin you use locally
+
+If you need local HTTPS, you can use tools such as `mkcert`, `vite`, or a local reverse proxy. The exact tool does not matter as much as the requirement that the callback origin be `https://` so the browser accepts `Secure`.
+
+A common local configuration pattern:
+
+```ts
+// app/session.server.ts
+const isLocalHttps = process.env.APP_URL?.startsWith("https://");
+const isProduction = process.env.NODE_ENV === "production";
+
+export const sessionStorage = createCookieSessionStorage({
+  cookie: {
+    name: "__session",
+    httpOnly: true,
+    sameSite: isLocalHttps ? "none" : "lax",
+    secure: isLocalHttps || isProduction,
+    path: "/",
+    secrets: [process.env.SESSION_SECRET ?? "dev-secret"],
+  },
+});
+```
+
+This allows local HTTP development to continue when the callback is same-site or top-level `GET` based, while still using the correct settings in HTTPS environments.
+
+Be careful with this approach. It should reflect the actual callback mechanics. If production depends on `SameSite=None`, then local testing should also use HTTPS so the same browser rules apply.
+
+## How to validate the callback flow
+
+You can validate the setup with browser developer tools and a simple request trace.
+
+Check these items in the Network tab:
+
+- the initial response that sets `Set-Cookie`
+- the redirect to the third-party site
+- the callback request back to Remix
+- the `Cookie` request header on the callback
+
+If the callback request lacks the session cookie, inspect the cookie stored by the browser. In Chrome or Firefox, verify:
+
+- `SameSite`
+- `Secure`
+- domain and path
+- expiry time
+- whether the cookie was blocked by browser policy
+
+A simple command-line check can confirm that Remix is setting what you expect:
+
+```bash
+curl -I http://localhost:3000/login
+```
+
+Look for a `Set-Cookie` header that contains the expected attributes. If the flow depends on cross-site return, the relevant cookie should look like this:
+
+```http
+Set-Cookie: __session=...; Path=/; HttpOnly; Secure; SameSite=None
+```
+
+If you are testing a redirect-based flow with `curl`, remember that `curl` does not emulate browser `SameSite` logic. It can show headers, but it cannot prove browser cookie attachment across sites. Browser validation is required.
+
+If the callback is a `GET` and you want to test whether the session cookie survives the return path, inspect the server log for the incoming `Cookie` header on the callback request. In Remix, you can temporarily log it:
+
+```ts
+export async function loader({ request }: LoaderFunctionArgs) {
+  console.log(request.headers.get("Cookie"));
+  return new Response("ok");
+}
+```
+
+If the header is `null` or does not include `__session`, the browser did not send it.
+
+## Common configuration mistakes
+
+Several settings produce the same symptom.
+
+### `SameSite=Strict` on a third-party callback
+
+The browser refuses to send the cookie after a cross-site navigation. The callback starts with a fresh session.
+
+### `SameSite=None` without `Secure`
+
+Modern browsers reject the cookie. It may appear to be set in some tools, but it is not reliably stored or returned.
+
+### Callback uses `POST` but the cookie is `Lax`
+
+The browser does not include the cookie on a cross-site `POST` return. This is common with identity providers that POST form data to the callback route.
+
+### The cookie domain or path does not match
+
+A cookie with a narrow `path` or a mismatched `domain` is not available on the callback URL even if `SameSite` is correct.
+
+### Production and local dev use different origins
+
+If production is `https://app.example.com` and local dev is `http://localhost:3000`, the browser will not treat them the same way. A provider that returns to one origin may not behave the same as the other.
+
+## A practical Remix configuration
+
+A reasonable default for a production app that needs third-party callbacks is:
+
+```ts
+// app/session.server.ts
+import { createCookieSessionStorage } from "@remix-run/node";
+
+export const sessionStorage = createCookieSessionStorage({
+  cookie: {
+    name: "__session",
+    httpOnly: true,
+    sameSite: "none",
+    secure: true,
+    path: "/",
+    secrets: [process.env.SESSION_SECRET ?? "dev-secret"],
+  },
+});
+
+export const { getSession, commitSession, destroySession } =
+  sessionStorage;
+```
+
+Then make sure:
+
+- the app is served over HTTPS
+- the callback URL matches the registered provider URL exactly
+- the callback route reads the cookie before creating a new session
+- local development uses HTTPS if you need to reproduce production behavior
+
+If the callback is same-site and uses a normal `GET`, `SameSite=Lax` is often enough and avoids widening cross-site cookie behavior. If the callback is truly third-party and the cookie must survive the return, use `SameSite=None; Secure`.
+
+## Practical takeaway
+
+Prefer `SameSite=Lax` when the callback is a top-level `GET` and the flow works without cross-site `POST` access. Prefer `SameSite=None; Secure` when a third-party callback must read the existing session cookie. Keep `Strict` only for cookies that should never leave same-site navigation. To keep the problem from coming back, verify the exact callback method, confirm the browser sends `Cookie` on the return request, and test the same cookie attributes under HTTPS before shipping.
