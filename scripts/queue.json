@@ -2,20 +2,6 @@
     "generatedAt": "2026-10-25T22:08:28.258Z",
     "ideas": [
         {
-            "cell": "nginx-x-forwarded-host::nginx::host-header-proxy-rewrite",
-            "title": "Nginx Sends the Wrong Host Header to an Upstream App Behind a Reverse Proxy",
-            "description": "Show how Nginx rewrites Host and `X-Forwarded-*` headers and how to preserve the original domain upstream.",
-            "tags": [
-                "nginx",
-                "reverse-proxy",
-                "headers",
-                "host",
-                "forwarded"
-            ],
-            "angle": "Open with the exact upstream symptom, such as the app generating redirects or absolute URLs for the proxy host. Explain how Nginx sets `Host`, `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-For` by default and why applications depend on them for canonical URLs. Show the proxy configuration needed to pass the original host through and how to confirm the upstream sees the expected request metadata.",
-            "slug": "nginx-sends-the-wrong-host-header-to-an-upstream-app-behind-a-reverse-proxy"
-        },
-        {
             "cell": "cloudflare-workers-wrangler-env-bindings::cloudflare-workers::missing-binding-declaration",
             "title": "Cloudflare Workers Read `undefined` Environment Bindings Because `wrangler.toml` Does Not Declare Them",
             "description": "Show why a Worker sees missing secrets or vars at runtime and how to define bindings in `wrangler.toml` correctly.",
@@ -46,19 +32,19 @@
     ],
     "drafted": [
         {
-            "cell": "remix-session-cookie-samesite::remix::cross-site-session-callback",
-            "title": "Remix Loses Session Cookies on a Cross-Site Callback Because `SameSite` Blocks the Cookie",
-            "description": "Explain why a Remix session cookie disappears on a third-party redirect and how to set cookie attributes correctly.",
+            "cell": "nginx-x-forwarded-host::nginx::host-header-proxy-rewrite",
+            "title": "Nginx Sends the Wrong Host Header to an Upstream App Behind a Reverse Proxy",
+            "description": "Show how Nginx rewrites Host and `X-Forwarded-*` headers and how to preserve the original domain upstream.",
             "tags": [
-                "remix",
-                "cookies",
-                "sessions",
-                "same-site",
-                "auth"
+                "nginx",
+                "reverse-proxy",
+                "headers",
+                "host",
+                "forwarded"
             ],
-            "angle": "Open with the exact symptom: the callback route cannot read the session cookie after the redirect. Explain how browser cookie rules treat `SameSite=Lax`, `SameSite=Strict`, and `SameSite=None; Secure` during cross-site navigation. Cover how to configure the session storage cookie in Remix, when to use `Secure`, and how to validate the callback flow without breaking local development.",
-            "slug": "remix-loses-session-cookies-on-a-cross-site-callback-because-samesite-blocks-the-cookie",
-            "draftedAt": "2026-10-29T01:27:41.206Z"
+            "angle": "Open with the exact upstream symptom, such as the app generating redirects or absolute URLs for the proxy host. Explain how Nginx sets `Host`, `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-For` by default and why applications depend on them for canonical URLs. Show the proxy configuration needed to pass the original host through and how to confirm the upstream sees the expected request metadata.",
+            "slug": "nginx-sends-the-wrong-host-header-to-an-upstream-app-behind-a-reverse-proxy",
+            "draftedAt": "2026-10-30T01:29:01.961Z"
         }
     ]
 }
