@@ -1,0 +1,338 @@
+---
+title: "Nginx Sends the Wrong Host Header to an Upstream App Behind a Reverse Proxy"
+description: "Show how Nginx rewrites Host and `X-Forwarded-*` headers and how to preserve the original domain upstream."
+tags: ["nginx", "reverse-proxy", "headers", "host", "forwarded"]
+date: Oct 30, 2026
+cell: "nginx-x-forwarded-host::nginx::host-header-proxy-rewrite"
+---
+
+Upstream applications behind Nginx often generate redirects and absolute URLs for the proxy host instead of the public domain, with responses such as `Location: http://127.0.0.1:3000/login` or `Location: https://proxy.internal.example/account` when the browser requested `https://app.example.com/`. In many stacks, the app also logs the wrong `Host` value because Nginx forwards the upstream address unless configured otherwise.
+
+## What Nginx changes by default
+
+When Nginx acts as a reverse proxy with `proxy_pass`, it does not blindly forward the original client request headers. It creates a new upstream request and sets several proxy-related headers explicitly or implicitly.
+
+The important ones are:
+
+- `Host`
+- `X-Forwarded-Host`
+- `X-Forwarded-Proto`
+- `X-Forwarded-For`
+
+The default behavior depends on which directives are present. Nginx does not automatically preserve every client header. If you do nothing, the upstream usually sees the upstream target host in `Host`, and many applications use that value when constructing canonical URLs, redirect targets, password reset links, callback URLs, or absolute asset links.
+
+That matters because many frameworks derive “public base URL” from request metadata. If `Host` says `127.0.0.1:3000`, the app may treat that as the canonical origin. If `X-Forwarded-Proto` is missing or wrong, it may generate `http://` links on a TLS site. If `X-Forwarded-For` is missing, the app loses the client IP chain.
+
+## Why applications depend on these headers
+
+Reverse-proxied applications often need to know what the browser actually requested, not just where Nginx sent the upstream connection.
+
+Typical uses include:
+
+- building absolute redirects with `Location`
+- generating `Set-Cookie` attributes with the correct `Secure` and domain behavior
+- computing canonical URLs for OAuth or SAML callbacks
+- selecting the right tenant or site from the requested hostname
+- logging and rate limiting by client IP
+
+The application can only do that reliably if the request metadata matches the public request.
+
+A common failure mode is this:
+
+- user requests `https://app.example.com/login`
+- Nginx proxies to `http://10.0.0.15:3000`
+- upstream sees `Host: 10.0.0.15:3000`
+- framework builds `Location: http://10.0.0.15:3000/dashboard`
+- browser follows a redirect to the private address or to the proxy’s internal name
+
+That is not an application bug in isolation. It is a proxy metadata problem.
+
+## How Nginx sets the proxy headers
+
+Nginx exposes the client request and connection metadata through variables. The usual reverse-proxy configuration maps those variables into headers.
+
+A typical minimal proxy location looks like this:
+
+```nginx
+location / {
+    proxy_pass http://app_upstream;
+}
+```
+
+With only that, Nginx will proxy the request, but the upstream host and scheme information may not match the original client-facing request.
+
+A more explicit configuration is:
+
+```nginx
+location / {
+    proxy_pass http://app_upstream;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+### `Host`
+
+`$host` is Nginx’s normalized host value. It is derived from the request line or the incoming `Host` header. In practice, this is what you want when preserving the public hostname.
+
+If you want the exact raw header value, use `$http_host` instead. That includes the port if the client sent one. For most reverse-proxy setups, `$host` is preferred because it is normalized and safe when the client header is missing.
+
+### `X-Forwarded-Host`
+
+This header records the original `Host` value that the client used. Many frameworks prefer it when they know they are behind a proxy, because `Host` on the upstream connection may reflect the proxy-to-app transport address.
+
+### `X-Forwarded-Proto`
+
+This header tells the app whether the browser request came in over `http` or `https`. Without it, the app may assume plain HTTP because the upstream connection between Nginx and the app is often unencrypted.
+
+That is the main cause of redirect loops and insecure absolute links when TLS terminates at Nginx.
+
+### `X-Forwarded-For`
+
+This header carries the client IP chain. Nginx appends the current client address to any existing `X-Forwarded-For` value using `$proxy_add_x_forwarded_for`.
+
+That preserves the original client address while keeping intermediary proxies in the chain.
+
+## The recommended Nginx configuration
+
+A complete reverse-proxy block usually needs more than the basic four headers. A practical config looks like this:
+
+```nginx
+upstream app_upstream {
+    server 127.0.0.1:3000;
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name app.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/app.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/app.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://app_upstream;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+The `proxy_http_version 1.1` and `proxy_set_header Connection ""` lines are common when the upstream uses keepalive connections.
+
+The `X-Real-IP` header is not standardized, but some applications read it directly. It can be useful alongside `X-Forwarded-For`.
+
+## Preserving the original host exactly
+
+There are two common choices for the `Host` header:
+
+- `proxy_set_header Host $host;`
+- `proxy_set_header Host $http_host;`
+
+Use `$host` when you want a normalized host without relying on the client sending a valid header. Use `$http_host` when the upstream must see the exact header, including port, and you trust the client input or are controlling it tightly.
+
+For most applications behind a public reverse proxy, this is the safer default:
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Host $host;
+```
+
+If the public site must distinguish `app.example.com:8443` from `app.example.com`, then `$http_host` may be necessary:
+
+```nginx
+proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-Host $http_host;
+```
+
+The tradeoff is that `$http_host` is raw client data. In environments where clients can send arbitrary host values, you usually also want `server_name` restrictions and a default server that rejects unknown hostnames.
+
+## Why redirects break when `Host` is wrong
+
+Many web frameworks compute redirect targets from the request URL or from a base URL inferred from the request.
+
+For example, an authentication endpoint might issue a redirect like:
+
+```http
+HTTP/1.1 302 Found
+Location: https://app.example.com/oauth/callback
+```
+
+If the upstream sees the wrong host, the framework may emit:
+
+```http
+Location: http://127.0.0.1:3000/oauth/callback
+```
+
+Browsers follow redirects using the `Location` header. If that header points at an internal address, the user is sent to the wrong place or the request fails entirely.
+
+The same problem affects:
+
+- password-reset links in emails
+- absolute redirects after login
+- OpenAPI or canonical link generation
+- cross-origin cookie settings
+- server-side rendered links in HTML
+
+The proxy is not only forwarding traffic. It is shaping what the app believes the origin to be.
+
+## How to confirm what the upstream receives
+
+You can verify the header values in several ways.
+
+### Check Nginx access and error logs
+
+First, make sure Nginx is actually sending the headers you expect. Then inspect application logs or add a temporary endpoint that prints request metadata.
+
+A simple Nginx log format can include forwarded headers:
+
+```nginx
+log_format proxydebug '$remote_addr "$request" '
+                      'host="$host" '
+                      'xff="$http_x_forwarded_for" '
+                      'xfh="$http_x_forwarded_host" '
+                      'xfp="$http_x_forwarded_proto"';
+
+access_log /var/log/nginx/access.log proxydebug;
+```
+
+Here, `$http_x_forwarded_host` and `$http_x_forwarded_proto` show the inbound request headers to Nginx, not what was sent upstream. That is still useful for checking whether the client-side request is arriving with the right `Host`.
+
+### Inspect the request inside the app
+
+A direct inspection endpoint is more reliable because it shows what the app receives after Nginx rewrites the request.
+
+For a Node.js app, this TypeScript handler can print the relevant headers:
+
+```ts
+import express from "express";
+
+const app = express();
+
+app.get("/debug/headers", (req, res) => {
+  res.json({
+    host: req.headers.host,
+    forwardedHost: req.headers["x-forwarded-host"],
+    forwardedProto: req.headers["x-forwarded-proto"],
+    forwardedFor: req.headers["x-forwarded-for"],
+    remoteAddress: req.socket.remoteAddress,
+  });
+});
+
+app.listen(3000);
+```
+
+If the proxy is configured correctly, a request to `https://app.example.com/debug/headers` should return values like:
+
+```json
+{
+  "host": "app.example.com",
+  "forwardedHost": "app.example.com",
+  "forwardedProto": "https",
+  "forwardedFor": "203.0.113.10",
+  "remoteAddress": "127.0.0.1"
+}
+```
+
+The `remoteAddress` will usually be the Nginx host or loopback interface, because the app is seeing the proxy connection, not the browser connection.
+
+### Use `curl` to test the external and upstream views
+
+From a client machine, test the public endpoint:
+
+```bash
+curl -vkI https://app.example.com/login
+```
+
+Look for a `Location` header that points back to `https://app.example.com/...`, not to the upstream IP or proxy hostname.
+
+To test host handling explicitly, send a request with a custom `Host` header to Nginx:
+
+```bash
+curl -vk https://203.0.113.20/ -H 'Host: app.example.com'
+```
+
+This confirms the proxy routes the request correctly based on the intended hostname.
+
+If you control the upstream directly, you can also test it without Nginx to compare behavior, but the key check is the upstream-visible metadata through the proxy.
+
+## Common misconfigurations
+
+### Forwarding the wrong `Host`
+
+A frequent mistake is leaving `proxy_set_header Host $proxy_host;` in place or omitting the directive entirely. In that case, the upstream host can become the value from `proxy_pass`, such as `127.0.0.1:3000`.
+
+If the application uses `Host` to build URLs, the browser will see the wrong domain.
+
+### Setting only `Host` and not `X-Forwarded-Proto`
+
+If the upstream is behind TLS-terminating Nginx, the app still needs to know that the original request used HTTPS. Setting only `Host` fixes host-based redirects, but not scheme-based redirects.
+
+This is why apps can still emit `http://` links even when `Host` is correct.
+
+### Forgetting `X-Forwarded-For`
+
+Without `X-Forwarded-For`, the application sees only the proxy IP. That breaks client IP logging and can affect authentication, rate limiting, and abuse detection.
+
+Use:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+not just a fixed value. The append behavior matters when there are multiple proxies.
+
+### Trusting forwarded headers from untrusted clients
+
+If the app trusts `X-Forwarded-Proto` or `X-Forwarded-Host` from arbitrary clients, the values can be spoofed. That trust boundary must be set at the proxy layer.
+
+Nginx should overwrite these headers before the request reaches the app. The application should only trust forwarded headers from known proxy IPs or proxy-aware middleware.
+
+## Application-side expectations
+
+Different frameworks need different proxy settings in addition to the Nginx config.
+
+Examples:
+
+- Express often needs `app.set("trust proxy", true)` or a more restrictive proxy trust configuration.
+- Django uses `SECURE_PROXY_SSL_HEADER` when `X-Forwarded-Proto` is the source of truth.
+- Rails uses `config.force_ssl`, `config.action_dispatch.trusted_proxies`, and related proxy settings.
+- Next.js, Fastify, and similar frameworks may need explicit reverse-proxy support depending on how redirects are generated.
+
+The Nginx headers are necessary, but not always sufficient. The application must be configured to trust and interpret them correctly.
+
+## Verifying the fix
+
+After updating the proxy config, validate these behaviors:
+
+- `Location` headers point to the public hostname.
+- Absolute links in HTML use the public hostname.
+- HTTPS requests generate `https://` redirects and callbacks.
+- Logs show the expected client IP chain in `X-Forwarded-For`.
+- The app sees the public domain in `Host` and `X-Forwarded-Host`.
+
+A simple validation sequence is:
+
+```bash
+nginx -t
+sudo systemctl reload nginx
+curl -vkI https://app.example.com/
+curl -vk https://app.example.com/debug/headers
+```
+
+If the app still emits the wrong host, inspect both the Nginx config and the app’s proxy-trust settings. One without the other is incomplete.
+
+## Practical takeaway
+
+Prefer an explicit reverse-proxy block that sets `Host`, `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-For` from Nginx variables, usually with `proxy_set_header Host $host;` and `proxy_set_header X-Forwarded-Proto $scheme;`. That combination preserves the public origin, keeps redirects and absolute URLs correct, and gives the application the metadata it needs to behave as if it were handling the browser request directly. Confirm the fix by checking the upstream-visible headers and by verifying that redirects return the public domain instead of the proxy or upstream address.
