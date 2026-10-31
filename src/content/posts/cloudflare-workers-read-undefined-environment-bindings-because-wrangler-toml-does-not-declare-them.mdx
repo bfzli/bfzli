@@ -1,0 +1,355 @@
+---
+title: "Cloudflare Workers Read `undefined` Environment Bindings Because `wrangler.toml` Does Not Declare Them"
+description: "Show why a Worker sees missing secrets or vars at runtime and how to define bindings in `wrangler.toml` correctly."
+tags: ["cloudflare-workers", "wrangler", "env", "bindings", "deployment"]
+date: Oct 31, 2026
+cell: "cloudflare-workers-wrangler-env-bindings::cloudflare-workers::missing-binding-declaration"
+---
+
+`ReferenceError: SECRET_KEY is not defined` or `TypeError: Cannot read properties of undefined` appears inside a Cloudflare Worker when code reads a binding that was never declared in `wrangler.toml`, so the runtime receives no `env.SECRET_KEY`, no `env.MY_KV`, and no `env.DB`.
+
+## What is actually missing at runtime
+
+Cloudflare Workers do not discover environment bindings from source code. A Worker only receives the bindings that Wrangler sends during deployment, and Wrangler only sends bindings that are declared in the project configuration.
+
+That means a variable name used in code is not enough. If `src/index.ts` reads `env.API_URL`, then `API_URL` must exist in `wrangler.toml` under `[vars]`, or be present as a secret created by Wrangler, or be defined as a service, KV, D1, R2, durable object, or other supported binding. Otherwise the Worker runs with that property absent.
+
+The failure usually appears in one of these forms:
+
+```text
+ReferenceError: API_URL is not defined
+```
+
+or:
+
+```text
+TypeError: Cannot read properties of undefined (reading 'get')
+```
+
+or a plain missing value:
+
+```text
+env.API_URL === undefined
+```
+
+The exact message depends on how the binding is used. Reading an undeclared global name throws a `ReferenceError`. Reading a property off `env` yields `undefined`. Calling a method on an undefined binding produces a `TypeError`.
+
+## How Wrangler supplies bindings
+
+Wrangler is the deployment tool that translates `wrangler.toml` into the runtime configuration for the Worker.
+
+There are three common sources of values:
+
+- `[vars]` for plain text configuration values
+- `wrangler secret put` for secrets
+- resource bindings such as `kv_namespaces` and `d1_databases`
+
+These are not interchangeable.
+
+A plain variable in `[vars]` becomes a literal string available on `env`. A secret also becomes a binding on `env`, but the value is stored and injected separately by Cloudflare rather than written into the config file. A KV namespace or D1 database binding does not provide a string value; it provides an object with methods such as `get`, `put`, or `prepare`.
+
+If a binding is missing from the deployed configuration, the Worker runtime does not create a placeholder for it. There is no automatic fallback to local files, source code names, or process environment variables from your machine.
+
+## The Worker runtime only sees declared bindings
+
+A Worker module receives `env` as the second argument in the module handler. In TypeScript, that usually looks like this:
+
+```ts
+export interface Env {
+  API_URL: string;
+  SECRET_KEY: string;
+  CACHE: KVNamespace;
+  DB: D1Database;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const apiUrl = env.API_URL;
+    const secret = env.SECRET_KEY;
+    const cached = await env.CACHE.get("homepage");
+    const row = await env.DB.prepare("SELECT 1").first();
+
+    return Response.json({
+      apiUrl,
+      secretPresent: Boolean(secret),
+      cached,
+      row,
+    });
+  },
+};
+```
+
+This compiles only if the types are declared, but the runtime still depends on `wrangler.toml` and deployed secrets. TypeScript does not create runtime bindings.
+
+If `API_URL` is missing from `wrangler.toml`, `env.API_URL` is `undefined` at runtime. If `CACHE` is missing, `env.CACHE.get(...)` throws because `env.CACHE` is undefined. If `DB` is missing, `env.DB.prepare(...)` fails the same way.
+
+## Declaring plain variables with `[vars]`
+
+Use `[vars]` for non-secret strings, numbers, and booleans that can be safely stored in configuration. Wrangler sends them to the Worker as strings unless the platform-specific schema converts them for a binding type.
+
+Example `wrangler.toml`:
+
+```toml
+name = "binding-example"
+main = "src/index.ts"
+compatibility_date = "2026-10-31"
+
+[vars]
+API_URL = "https://api.example.com"
+LOG_LEVEL = "debug"
+ENABLE_METRICS = "true"
+```
+
+Then in code:
+
+```ts
+type Env = {
+  API_URL: string;
+  LOG_LEVEL: string;
+  ENABLE_METRICS: string;
+};
+
+export default {
+  async fetch(_request: Request, env: Env) {
+    return new Response(
+      `API_URL=${env.API_URL}, LOG_LEVEL=${env.LOG_LEVEL}, ENABLE_METRICS=${env.ENABLE_METRICS}`
+    );
+  },
+};
+```
+
+If `[vars]` is omitted, `env.API_URL` does not exist. The Worker does not infer it from usage.
+
+For booleans and numbers, the value arrives as a string in many Worker setups. Handle conversion explicitly:
+
+```ts
+const retries = Number(env.RETRIES ?? "0");
+const enabled = env.ENABLE_METRICS === "true";
+```
+
+Do not assume the runtime will coerce types for you.
+
+## Declaring KV namespaces with `kv_namespaces`
+
+A KV namespace is not a string variable. It is a binding to a storage namespace. It must be declared in `wrangler.toml` and bound to a variable name that the Worker code uses.
+
+Example:
+
+```toml
+name = "binding-example"
+main = "src/index.ts"
+compatibility_date = "2026-10-31"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "2f6a0a0d2b8a4a7cb2cc9f0d2d2f3d11"
+preview_id = "7bb1c3a7f41e4f4eb3e5a8fd9a0b8f90"
+```
+
+The `binding` value is the property name on `env`. The `id` is the production namespace ID. The `preview_id` is used for local preview and test contexts when present.
+
+Usage:
+
+```ts
+type Env = {
+  CACHE: KVNamespace;
+};
+
+export default {
+  async fetch(_request: Request, env: Env) {
+    const value = await env.CACHE.get("homepage");
+    return new Response(value ?? "missing");
+  },
+};
+```
+
+If `[[kv_namespaces]]` is absent, `env.CACHE` is `undefined`. The error appears when you call `get`, `put`, `delete`, or similar methods.
+
+A common mistake is to declare a namespace in Cloudflare but not bind it in the project config. The namespace exists in the account, but the Worker still has no access until `wrangler.toml` names it.
+
+## Declaring D1 databases with `d1_databases`
+
+D1 databases also require a binding declaration in `wrangler.toml`. The Worker receives a database handle, not the database data itself.
+
+Example:
+
+```toml
+name = "binding-example"
+main = "src/index.ts"
+compatibility_date = "2026-10-31"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "app_db"
+database_id = "b3c8f8f0-4f90-4e26-8ff7-1d5edb7a0f19"
+migrations_dir = "migrations"
+```
+
+TypeScript usage:
+
+```ts
+type Env = {
+  DB: D1Database;
+};
+
+export default {
+  async fetch(_request: Request, env: Env) {
+    const result = await env.DB.prepare("SELECT 1 AS value").first<{ value: number }>();
+    return Response.json(result);
+  },
+};
+```
+
+If `DB` is not declared, `env.DB` is undefined and any query call fails. If the `binding` name in `wrangler.toml` is `DATABASE` but code expects `DB`, the runtime value exists under `env.DATABASE`, not `env.DB`. The property name must match exactly.
+
+## Secrets are not in `[vars]`
+
+Secrets are separate from plain config. They are written with Wrangler and injected at deployment time as secure bindings.
+
+Create or update a secret with:
+
+```bash
+npx wrangler secret put SECRET_KEY
+```
+
+Wrangler prompts for the value and stores it in Cloudflare. The secret becomes available in the Worker as `env.SECRET_KEY`.
+
+Use it like this:
+
+```ts
+type Env = {
+  SECRET_KEY: string;
+};
+
+export default {
+  async fetch(_request: Request, env: Env) {
+    const token = env.SECRET_KEY;
+    return new Response(token ? "secret present" : "secret missing");
+  },
+};
+```
+
+Do not place secret values in `[vars]` if the value must stay out of version control. Do not expect `wrangler.toml` to reference the secret value directly. The file declares the name, but the value is managed by Wrangler and Cloudflare.
+
+If the secret was created under a different environment, for example `preview` versus `production`, the deployed Worker may still see `undefined` in the environment where it was never set.
+
+## Deployment is required for the runtime to receive changes
+
+Editing `wrangler.toml` changes local configuration only. The deployed Worker does not receive new bindings until you deploy again.
+
+Use:
+
+```bash
+npx wrangler deploy
+```
+
+or, for a named environment:
+
+```bash
+npx wrangler deploy --env production
+```
+
+If you are using `wrangler dev`, local runtime behavior can differ from deployed behavior. A binding added to `wrangler.toml` may work locally if the dev environment reads your config, but the deployed Worker will still lack it until the next deploy. The inverse can also happen if a secret exists remotely but your local session is not configured the same way.
+
+After changing any of these, redeploy:
+
+- `[vars]`
+- `kv_namespaces`
+- `d1_databases`
+- secrets created with `wrangler secret put`
+
+Without deployment, the Worker on the edge continues running the old binding set.
+
+## Matching the binding name in code and configuration
+
+The binding name is the contract between config and runtime. This must match exactly.
+
+Good:
+
+```toml
+[vars]
+API_URL = "https://api.example.com"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "2f6a0a0d2b8a4a7cb2cc9f0d2d2f3d11"
+```
+
+```ts
+type Env = {
+  API_URL: string;
+  CACHE: KVNamespace;
+};
+
+export default {
+  async fetch(_request: Request, env: Env) {
+    const cached = await env.CACHE.get("key");
+    return new Response(`${env.API_URL} ${cached ?? ""}`);
+  },
+};
+```
+
+Bad:
+
+```toml
+[vars]
+APIURL = "https://api.example.com"
+```
+
+```ts
+env.API_URL
+```
+
+Here the runtime has `APIURL`, not `API_URL`. The mismatch produces `undefined`.
+
+The same rule applies to secrets and resource bindings. If the names differ, the property is missing.
+
+## Diagnosing missing bindings
+
+You can inspect the deployment configuration with Wrangler.
+
+Check what is deployed:
+
+```bash
+npx wrangler deployments list
+```
+
+Inspect logs while exercising the Worker:
+
+```bash
+npx wrangler tail
+```
+
+If a binding is missing, log the values defensively:
+
+```ts
+type Env = {
+  API_URL?: string;
+  CACHE?: KVNamespace;
+  DB?: D1Database;
+};
+
+export default {
+  async fetch(_request: Request, env: Env) {
+    console.log({
+      apiUrl: env.API_URL,
+      hasCache: Boolean(env.CACHE),
+      hasDb: Boolean(env.DB),
+    });
+
+    return new Response("ok");
+  },
+};
+```
+
+The logs confirm whether the runtime received the binding. If `hasCache` is `false`, the issue is configuration, not code paths.
+
+For local type safety, declare the environment interface in one place and reuse it. That catches name mismatches in TypeScript, but it still does not guarantee deployment completeness.
+
+## Preventing the missing-binding failure
+
+The practical fix is to declare every runtime dependency in `wrangler.toml` and deploy after each change.
+
+Use `[vars]` for non-secret strings. Use `wrangler secret put` for secret values. Use `kv_namespaces` and `d1_databases` for resources that expose methods rather than scalar values. Keep the binding names in code and config identical. Redeploy after updates with `npx wrangler deploy`.
+
+That combination prevents the Worker from starting with `undefined` bindings because it makes the runtime contract explicit.
