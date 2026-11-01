@@ -1,0 +1,334 @@
+---
+title: "Vite Throws `Module \"fs\" has been externalized for browser compatibility` When Browser Code Imports Node Built-ins"
+description: "Explain why Vite externalizes Node built-ins in browser bundles and how to keep server-only modules out of client code."
+tags: ["vite", "browser-bundle", "node-builtins", "ssr", "rollup"]
+date: Nov 1, 2026
+cell: "vite-ssr-node-builtins-browser::vite::server-only-import-leak"
+---
+
+A browser bundle built by Vite breaks when an import chain reaches `fs`, `path`, `crypto`, or another Node built-in, and Vite prints `Module "fs" has been externalized for browser compatibility. Cannot access "fs.readFile" in client code.` The same pattern appears with `path`, `os`, `net`, and other Node-only modules when a client entry imports a shared module that eventually imports server code.
+
+## Why Vite externalizes Node built-ins
+
+Vite builds browser code with a strong assumption: anything in the client graph must run in a real browser. Browser bundles cannot use Node's `fs` module, `path` resolution APIs, or most of the standard library. When Vite sees a Node built-in in a dependency chain that is going to the browser, it does not bundle a polyfill by default. Instead, it externalizes the module and leaves a runtime stub that throws the compatibility error.
+
+That behavior is deliberate. Browser support for Node built-ins is incomplete and inconsistent, and automatic polyfills create hidden size and behavior costs. Vite's default is to make the boundary visible.
+
+The error usually means the import chain looks like this:
+
+```text
+src/main.ts
+  -> src/app.ts
+    -> src/shared/index.ts
+      -> src/server/config.ts
+        -> fs
+```
+
+Or:
+
+```text
+src/main.tsx
+  -> src/routes/Home.tsx
+    -> @acme/utils
+      -> src/index.ts
+        -> path
+```
+
+The top-level file may be harmless. The real problem is that a shared entry point pulled server-only code into a client bundle.
+
+## How Vite decides what goes into the client bundle
+
+Vite builds a module graph starting from the configured client entry, usually `index.html`, `src/main.ts`, or `src/main.tsx`. Every static import reachable from that entry is part of the client graph unless it is excluded by a dynamic boundary or resolved on the server only.
+
+The important rule is this: if a module is imported by client code, Vite treats it as client code.
+
+That means a file like `src/shared/index.ts` is not automatically safe just because it is named "shared". If it imports `fs` at the top level, then any client file importing from that shared entry indirectly imports `fs` too.
+
+This is also why the symptom often appears after a refactor. A utility package, a barrel file, or an index re-export becomes the shared entry point. The client code imports one harmless function, but the module graph still includes the server-only branch.
+
+A common example:
+
+```ts
+// src/shared/index.ts
+export * from './format'
+export * from './readConfig'
+```
+
+```ts
+// src/shared/readConfig.ts
+import fs from 'node:fs'
+import path from 'node:path'
+
+export function readConfigFile() {
+  const file = path.resolve(process.cwd(), 'config.json')
+  return fs.readFileSync(file, 'utf8')
+}
+```
+
+```ts
+// src/main.ts
+import { formatDate } from './shared'
+```
+
+Even though `main.ts` only uses `formatDate`, the barrel file imports `readConfig.ts`, and that imports `node:fs`. The browser bundle now contains a server-only dependency chain.
+
+## Identify the exact import chain
+
+The fix starts with the path that reaches the built-in. Search for the Node module named in the error. If the error says `fs`, search for `import fs from 'fs'`, `import * as fs from 'node:fs'`, or re-exports that lead to it.
+
+Useful commands:
+
+```bash
+grep -R "from 'fs'\|from \"fs\"\|from 'node:fs'\|from \"node:fs\"" src packages
+grep -R "from 'path'\|from \"path\"\|from 'node:path'\|from \"node:path\"" src packages
+```
+
+If the chain is not obvious, inspect the dependency graph with Vite's build output or a bundle analyzer. A quick first pass is to build with sourcemaps and search the generated chunks for the offending import.
+
+```bash
+vite build --sourcemap
+grep -R "node:fs\|externalized for browser compatibility" dist
+```
+
+For larger projects, `rollup-plugin-visualizer` can help show which entry points pull in server-only modules:
+
+```bash
+npm install -D rollup-plugin-visualizer
+```
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite'
+import { visualizer } from 'rollup-plugin-visualizer'
+
+export default defineConfig({
+  plugins: [visualizer({ filename: 'dist/stats.html', open: false })],
+})
+```
+
+If the visualizer shows a shared package or a barrel file feeding the client entry, that is the boundary you need to split.
+
+## Move server-only code out of the client graph
+
+The most reliable fix is to make the separation explicit. Client code should import client-safe modules only. Server-only code should live in modules that client code cannot reach.
+
+A straightforward file layout looks like this:
+
+```text
+src/
+  client/
+    main.ts
+    app.ts
+  server/
+    readConfig.ts
+  shared/
+    format.ts
+```
+
+Client code:
+
+```ts
+// src/client/main.ts
+import { formatDate } from '../shared/format'
+
+console.log(formatDate(new Date()))
+```
+
+Server-only code:
+
+```ts
+// src/server/readConfig.ts
+import fs from 'node:fs'
+import path from 'node:path'
+
+export function readConfigFile() {
+  const file = path.resolve(process.cwd(), 'config.json')
+  return fs.readFileSync(file, 'utf8')
+}
+```
+
+Shared code stays free of Node built-ins:
+
+```ts
+// src/shared/format.ts
+export function formatDate(value: Date) {
+  return value.toISOString()
+}
+```
+
+The rule is simple: do not re-export server code from shared barrels that client code imports.
+
+If you need a common interface, move the type into a shared file and keep the implementation split:
+
+```ts
+// src/shared/config-types.ts
+export type AppConfig = {
+  apiBaseUrl: string
+  featureFlag: boolean
+}
+```
+
+```ts
+// src/server/readConfig.ts
+import fs from 'node:fs'
+import path from 'node:path'
+import type { AppConfig } from '../shared/config-types'
+
+export function readConfigFile(): AppConfig {
+  const file = path.resolve(process.cwd(), 'config.json')
+  return JSON.parse(fs.readFileSync(file, 'utf8'))
+}
+```
+
+The type can be shared. The implementation should not be.
+
+## Use conditional code paths carefully
+
+Sometimes a single module needs to support both environments. The safe pattern is to keep Node-only imports out of the top level and gate them behind server-only conditions.
+
+This works when the import is truly runtime-only and the client never evaluates that branch:
+
+```ts
+// src/lib/loadConfig.ts
+export async function loadConfig() {
+  if (import.meta.env.SSR) {
+    const { readConfigFile } = await import('../server/readConfig')
+    return readConfigFile()
+  }
+
+  return null
+}
+```
+
+`import.meta.env.SSR` is `true` during server-side rendering and `false` in the browser. Vite can tree-shake some branches, but the important part is that the Node-only module is not imported at the top level of a client module.
+
+Do not do this:
+
+```ts
+// src/lib/loadConfig.ts
+import { readConfigFile } from '../server/readConfig'
+
+export function loadConfig() {
+  if (import.meta.env.SSR) {
+    return readConfigFile()
+  }
+
+  return null
+}
+```
+
+That still pulls `../server/readConfig` into the client graph because the import is static.
+
+If the module must be loaded only on the server, keep the entire file server-only and never import it from client code.
+
+## Use `.server` and `.client` conventions when the framework supports them
+
+Some frameworks built on Vite use file suffixes to enforce boundaries, such as `.server.ts`, `.client.ts`, or route-level conventions. Vite itself does not enforce those suffixes automatically, but the pattern is still useful for organization and for framework-specific tooling.
+
+Example:
+
+```text
+src/
+  data/
+    user.server.ts
+    user.client.ts
+```
+
+Server file:
+
+```ts
+// src/data/user.server.ts
+import fs from 'node:fs'
+
+export function readUserFixture() {
+  return JSON.parse(fs.readFileSync('fixtures/user.json', 'utf8'))
+}
+```
+
+Client file:
+
+```ts
+// src/data/user.client.ts
+export function readUserFixture() {
+  throw new Error('Server-only function')
+}
+```
+
+Then import the correct module from the correct side. The naming convention makes it harder to import the wrong file, and some routers or code generators can enforce the split.
+
+For applications that share code across a server renderer and browser client, this is often the cleanest long-term structure. The key is still the same: the client bundle must not transitively import Node built-ins.
+
+## Avoid barrel files that hide server imports
+
+A barrel file like `index.ts` is a common source of this issue because it hides the origin of an import. A client component imports one symbol, but the barrel re-exports everything, including server-only modules.
+
+Instead of this:
+
+```ts
+// src/utils/index.ts
+export * from './date'
+export * from './auth'
+export * from './readFile'
+```
+
+Prefer separate entry points:
+
+```ts
+// src/utils/date.ts
+export function formatDate(value: Date) {
+  return value.toISOString()
+}
+```
+
+```ts
+// src/server/readFile.ts
+import fs from 'node:fs'
+
+export function readFileUtf8(file: string) {
+  return fs.readFileSync(file, 'utf8')
+}
+```
+
+Then import them directly:
+
+```ts
+import { formatDate } from '../utils/date'
+```
+
+That makes the dependency boundary explicit and keeps accidental server imports out of the browser graph.
+
+## Confirm the bundle no longer includes Node-only dependencies
+
+After the refactor, verify the built output. A passing build is not enough if the server-only module is still in the graph but only not executed. You want the client bundle to be free of `fs`, `path`, and similar imports.
+
+Run the production build:
+
+```bash
+npm run build
+```
+
+Then inspect the output:
+
+```bash
+grep -R "node:fs\|from \"fs\"\|from 'fs'\|node:path\|from \"path\"\|from 'path'" dist
+```
+
+If the bundle is clean, that search should return nothing relevant in client chunks.
+
+You can also open the built assets and confirm the server module is absent from browser code. When using Rollup under Vite, a server-only import that survives into the client graph often appears as an external stub or a direct reference to the built-in name. That is the sign the boundary is still wrong.
+
+For SSR applications, check both sides separately. Server code may legitimately import `fs`, but browser chunks must not. The client and server build outputs should be inspected independently.
+
+## Prevent the problem from returning
+
+Keep a strict rule for imports:
+
+- client files import only browser-safe modules
+- server files can import Node built-ins
+- shared files must not import server-only code at the top level
+
+If you need shared types, put them in a types-only module and import them with `import type`. If you need shared behavior, extract only the browser-safe part. If you need Node access, move the code behind a server boundary or a runtime-only dynamic import guarded by `import.meta.env.SSR`.
+
+A practical directory split works better than relying on naming alone. Separate `src/client`, `src/server`, and `src/shared`. Avoid barrel files that mix those layers. Add a build check in CI that greps the client output for Node built-ins or uses a bundle analyzer to catch accidental regressions.
+
+The preferred fix is to remove the server-only import chain from the client graph entirely. Conditional code paths and `.server` files are useful when the module truly has two runtimes, but the safest default is a hard split between browser code and Node code. That keeps Vite from externalizing built-ins in the first place and keeps the browser bundle free of Node-only dependencies.
