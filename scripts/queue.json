@@ -1,6 +1,91 @@
 {
-    "generatedAt": "2026-10-25T22:08:28.258Z",
-    "ideas": [],
+    "generatedAt": "2026-11-01T23:11:30.619Z",
+    "ideas": [
+        {
+            "cell": "hydration-text-node::astro::server-client-output-diff",
+            "title": "Astro Hydration Mismatch Appears When Server and Client Render Different Text Content",
+            "description": "Astro throws a hydration mismatch when a component renders different text on the server and in the browser.",
+            "tags": [
+                "astro",
+                "hydration",
+                "ssr",
+                "client-side",
+                "rendering"
+            ],
+            "angle": "Open with the hydration warning and the exact DOM node that differs. Explain how Astro renders server HTML first, then replays the client component, why non-deterministic text like timestamps, locale formatting, or browser-only state creates divergence, and how to move that data into props or client-only code. Include the check for deterministic initial render output.",
+            "slug": "astro-hydration-mismatch-appears-when-server-and-client-render-different-text-content"
+        },
+        {
+            "cell": "missing-env-runtime::bun::production-process-env",
+            "title": "Bun Reads process.env as Undefined at Runtime When the Variable Never Reaches the Process",
+            "description": "Bun code sees `process.env` as undefined or empty when the variable is not exported into the runtime environment.",
+            "tags": [
+                "bun",
+                "environment-variables",
+                "runtime",
+                "process-env",
+                "deployment"
+            ],
+            "angle": "Open with the missing variable observed in Bun at runtime, not during build. Explain Bun's process environment model, how shell export, `.env` loading, and container or platform injection differ, and why a variable present in a local shell can disappear in a service process. Show the exact places to define, load, and verify the variable before the app starts.",
+            "slug": "bun-reads-process-env-as-undefined-at-runtime-when-the-variable-never-reaches-the-process"
+        },
+        {
+            "cell": "postgres-ssl-required::node-postgres::cloud-hosted-db",
+            "title": "Node.js Fails to Connect to Postgres with no pg_hba.conf Entry Unless SSL Is Enabled",
+            "description": "A managed Postgres server rejects connections until the client uses the SSL settings the provider requires.",
+            "tags": [
+                "nodejs",
+                "postgres",
+                "ssl",
+                "database",
+                "pg"
+            ],
+            "angle": "Open with the exact Postgres connection rejection and the server address. Explain how managed databases enforce SSL or require specific `sslmode` settings, why a plain TCP connection reaches authentication but fails at `pg_hba.conf`, and how to configure `pg` or `postgresql://` URLs correctly. Show how to verify the negotiated TLS connection from Node.",
+            "slug": "node-js-fails-to-connect-to-postgres-with-no-pg-hba-conf-entry-unless-ssl-is-enabled"
+        },
+        {
+            "cell": "ruby-gem-abi::native-addon::mismatched-platform",
+            "title": "Ruby Fails to Load a Native Gem Because the Platform ABI Does Not Match the Installed Extension",
+            "description": "A compiled Ruby gem cannot load when the native extension was built for a different platform or Ruby ABI.",
+            "tags": [
+                "ruby",
+                "gem",
+                "native-extension",
+                "abi",
+                "build"
+            ],
+            "angle": "Open with the load error that names the missing shared library or incompatible extension. Explain how native gems compile against a specific Ruby version, OS, and architecture, why cached binaries or copied `vendor/bundle` trees break on another target, and how to rebuild the extension with the correct toolchain. Include the commands that clear the bad artifact and install the matching gem build.",
+            "slug": "ruby-fails-to-load-a-native-gem-because-the-platform-abi-does-not-match-the-installed-extension"
+        },
+        {
+            "cell": "terraform-state-lock::terraform::remote-backend-concurrency",
+            "title": "Terraform Cannot Apply Because the State Is Locked by Another Operation",
+            "description": "Terraform blocks apply or plan when the remote state lock is held by a concurrent run or stale lock record.",
+            "tags": [
+                "terraform",
+                "state",
+                "locking",
+                "infrastructure",
+                "backend"
+            ],
+            "angle": "Start with the state-lock error and the lock ID. Explain how remote backends serialize writes to state, why parallel plans or interrupted applies leave a lock behind, and how Terraform uses locking to prevent corruption. Show how to identify a live lock versus a stale one and when to release it safely with the backend's lock mechanism.",
+            "slug": "terraform-cannot-apply-because-the-state-is-locked-by-another-operation"
+        },
+        {
+            "cell": "vite-workspace-alias::vite::package-json-import-graph",
+            "title": "Vite Resolves a Workspace Alias as Source Code Instead of the Published Package Entry",
+            "description": "Vite imports the wrong workspace file when an alias points at source instead of the package entry point.",
+            "tags": [
+                "vite",
+                "workspace",
+                "alias",
+                "package-json",
+                "build"
+            ],
+            "angle": "Open with the import that resolves to an unexpected workspace path. Explain Vite's alias precedence, how `resolve.alias`, package exports, and source shortcuts interact, and why development can appear correct while production bundles differ. Show how to point imports at the public entry surface and avoid leaking internal source paths into consumers.",
+            "slug": "vite-resolves-a-workspace-alias-as-source-code-instead-of-the-published-package-entry"
+        }
+    ],
     "drafted": [
         {
             "cell": "vite-ssr-node-builtins-browser::vite::server-only-import-leak",
