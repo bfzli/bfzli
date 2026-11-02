@@ -1,1 +1,2 @@
+bun scripts/git-rules.ts branch
 bun run web:check && bun run web:lint

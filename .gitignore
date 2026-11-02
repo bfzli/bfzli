@@ -5,6 +5,7 @@ scripts/*
 !scripts/lib
 !scripts/plan-posts.ts
 !scripts/write-post.ts
+!scripts/git-rules.ts
 !scripts/queue.json
 !scripts/topics.json
 .env
