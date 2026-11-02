@@ -1,13 +1,22 @@
 body {
     font-family:
-        'DM Sans',
-        'DM Sans Fallback',
+        'Onest',
+        'Onest Fallback',
         -apple-system,
         BlinkMacSystemFont,
         'Segoe UI',
         Roboto,
         system-ui,
         sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    letter-spacing: -0.01em;
 }
 
 code,

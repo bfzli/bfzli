@@ -1,66 +1,53 @@
 @font-face {
-    font-family: 'DM Sans';
+    font-family: 'Onest';
     font-style: normal;
-    font-weight: 400;
+    font-weight: 100 900;
     font-display: swap;
-    src: url('/fonts/dm-sans/DMSans-Regular.woff2') format('woff2');
+    src: url('/fonts/onest/onest-latin-wght-normal.woff2')
+        format('woff2-variations');
+    unicode-range:
+        U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+        U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+        U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 @font-face {
-    font-family: 'DM Sans';
+    font-family: 'Onest';
     font-style: normal;
-    font-weight: 500;
+    font-weight: 100 900;
     font-display: swap;
-    src: url('/fonts/dm-sans/DMSans-Medium.woff2') format('woff2');
+    src: url('/fonts/onest/onest-latin-ext-wght-normal.woff2')
+        format('woff2-variations');
+    unicode-range:
+        U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+        U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+        U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* Metric-matched fallbacks so the swap to the web fonts does not shift the layout. */
 @font-face {
-    font-family: 'DM Sans';
-    font-style: normal;
-    font-weight: 600;
-    font-display: swap;
-    src: url('/fonts/dm-sans/DMSans-SemiBold.woff2') format('woff2');
-}
-
-@font-face {
-    font-family: 'DM Sans';
-    font-style: normal;
-    font-weight: 700;
-    font-display: swap;
-    src: url('/fonts/dm-sans/DMSans-Bold.woff2') format('woff2');
-}
-
-@font-face {
-    font-family: 'DM Sans';
-    font-style: normal;
-    font-weight: 800;
-    font-display: swap;
-    src: url('/fonts/dm-sans/DMSans-ExtraBold.woff2') format('woff2');
-}
-
-@font-face {
-    font-family: 'DM Sans Fallback';
+    font-family: 'Onest Fallback';
     font-style: normal;
     font-weight: 400;
     src:
-        local('HelveticaNeue'), local('ArialMT'), local('Arial'),
+        local('ArialMT'), local('Arial'), local('HelveticaNeue'),
         local('Segoe UI'), local('Roboto');
-    size-adjust: 101.12%;
-    ascent-override: 98.10%;
-    descent-override: 30.66%;
+    size-adjust: 105.97%;
+    ascent-override: 91.54%;
+    descent-override: 28.78%;
     line-gap-override: 0%;
 }
 
 @font-face {
-    font-family: 'DM Sans Fallback';
+    font-family: 'Onest Fallback';
     font-style: normal;
     font-weight: 500 800;
     src:
-        local('HelveticaNeue-Bold'), local('Arial-BoldMT'),
+        local('Arial-BoldMT'), local('HelveticaNeue-Bold'),
         local('Segoe UI Bold'), local('Roboto-Bold');
-    size-adjust: 100.53%;
-    ascent-override: 98.68%;
-    descent-override: 30.84%;
+    size-adjust: 99.75%;
+    ascent-override: 97.24%;
+    descent-override: 30.58%;
     line-gap-override: 0%;
 }
 

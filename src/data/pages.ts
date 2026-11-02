@@ -1,4 +1,4 @@
-import { pageTitle } from '@/config'
+import { constants, pageTitle } from '@/config'
 
 export type StaticPageMeta = {
     slug: 'index' | 'products' | 'resume' | '404'
@@ -10,8 +10,8 @@ export type StaticPageMeta = {
 export const staticPages: Record<StaticPageMeta['slug'], StaticPageMeta> = {
     index: {
         slug: 'index',
-        title: pageTitle('Principal Engineer'),
-        description: 'A place where I share my thoughts and learnings 💭',
+        title: pageTitle('Software Engineer'),
+        description: constants.profile.bio,
         keywords:
             'uses, tools, web, software, personal, website, blog development, environment'
     },

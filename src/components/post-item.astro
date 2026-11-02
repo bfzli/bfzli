@@ -1,25 +1,59 @@
 ---
 import { Link, ListItem } from '@/components'
+import { isoDate, shortDate } from '@/utils/date'
+import { codeSegments } from '@/utils/text'
 
 interface Props {
     slug: string
     title: string
     description: string
+    date: string
 }
 
-const { slug, title, description } = Astro.props
+const { slug, title, description, date } = Astro.props
+const { day, year } = shortDate(date)
 ---
 
-<ListItem
-    class='transition-hover group mt-2 flex flex-col rounded-xl first:mt-0 hover:bg-post-hover'
->
-    <Link href={`/${slug}`} class='px-3 py-3'>
-        <h3 class='text-[19px] font-bold text-default'>
-            {title}
-        </h3>
+<ListItem class='transition-hover group rounded-xl hover:bg-post-hover'>
+    <Link
+        href={`/${slug}`}
+        class='grid gap-0.5 p-3 sm:grid-cols-[64px_1fr] sm:gap-4'
+    >
+        <time
+            datetime={isoDate(date)}
+            class='text-[13px] tabular-nums leading-6 text-comment'
+        >
+            <span class='sm:hidden'>{year ? `${day}, ${year}` : day}</span>
+            <span class='hidden sm:block'>{day}</span>
+            {year && <span class='hidden sm:block sm:leading-4'>{year}</span>}
+        </time>
 
-        <p class='mt-1.5 text-[14px] text-soft'>
-            {description}
-        </p>
+        <div>
+            <h3
+                class='post-title text-base font-semibold leading-6 text-default'
+            >
+                {
+                    codeSegments(title).map((segment) =>
+                        segment.code ? (
+                            <code class='inline-code'>{segment.text}</code>
+                        ) : (
+                            segment.text
+                        )
+                    )
+                }
+            </h3>
+
+            <p class='mt-1 text-[14px] leading-normal text-soft'>
+                {
+                    codeSegments(description).map((segment) =>
+                        segment.code ? (
+                            <code class='inline-code'>{segment.text}</code>
+                        ) : (
+                            segment.text
+                        )
+                    )
+                }
+            </p>
+        </div>
     </Link>
 </ListItem>

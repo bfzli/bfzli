@@ -65,21 +65,7 @@ const markdown = constants.site + markdownPath(Astro.url.pathname)
 
 <link
     rel='preload'
-    href='/fonts/dm-sans/DMSans-Regular.woff2'
-    as='font'
-    type='font/woff2'
-    crossorigin
-/>
-<link
-    rel='preload'
-    href='/fonts/dm-sans/DMSans-Medium.woff2'
-    as='font'
-    type='font/woff2'
-    crossorigin
-/>
-<link
-    rel='preload'
-    href='/fonts/dm-sans/DMSans-Bold.woff2'
+    href='/fonts/onest/onest-latin-wght-normal.woff2'
     as='font'
     type='font/woff2'
     crossorigin
@@ -88,6 +74,12 @@ const markdown = constants.site + markdownPath(Astro.url.pathname)
 <link rel='shortcut icon' type='image/ico' href='/favicon.ico' />
 <link rel='sitemap' href='/sitemap-index.xml' />
 <link rel='canonical' href={canonical} />
+<link
+    rel='alternate'
+    type='application/rss+xml'
+    title={profile.name}
+    href={`${constants.site}/rss.xml`}
+/>
 {
     props.noindex ? null : (
         <link

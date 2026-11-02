@@ -32,6 +32,16 @@ code::-webkit-scrollbar {
     padding: 0.08em 0.32em;
 }
 
+/* Post list titles keep code in the title font, marked only by a soft background. */
+.post-title .inline-code {
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    border: 0;
+    padding: 0 0.25em;
+    border-radius: 0.25rem;
+}
+
 code .highlight-line {
     @apply relative;
     background: var(--syntax-highline);

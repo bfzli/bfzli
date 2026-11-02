@@ -1,55 +1,61 @@
 import type { Experience, Skill, TechnicalGroup } from '@/types'
-import { modulify, azwedo, dreampix, trokit, nun } from '@/assets'
+import { openemail, modulify, azwedo, dreampix, trokit, nun } from '@/assets'
 
 export const experience: Experience[] = [
+    {
+        company: 'OpenEmail',
+        title: 'Founding Engineer',
+        logo: openemail,
+        description:
+            'Helping build OpenEmail’s core infrastructure: the console, admin tools, status pages, MCP server and SDK.'
+    },
     {
         company: 'Modulify',
         title: 'Principal Engineer',
         logo: modulify,
         description:
-            'Leading and managing the entire Modulify ecosystem including apps, Web, Webflow, CLI and APIs, while ensuring all Modulify AI services consistently run at peak performance.'
+            'Leading Modulify’s apps, Web, Webflow, CLI and APIs, keeping its AI services running at peak performance.'
     },
     {
         company: 'Azwedo',
         title: 'Software Engineer',
         logo: azwedo,
         description:
-            'Led back-end work on Merrfal, built Landdding end to end with GraphQL, and shipped mini apps with admin panels like Ikonik, Modulo, Goat Slider, Text Wizard AI, Svgflow and LogoToUse.'
+            'Led Merrfal’s back-end, built Landdding with GraphQL, and shipped Ikonik, Modulo, Svgflow and LogoToUse.'
     },
     {
         company: 'Dreampix',
         title: 'Lead Developer',
         logo: dreampix,
         description:
-            'Built and led development of an AI-powered wallpaper platform, implementing content distribution features while scaling the system for high-volume usage.'
+            'Built and led an AI-powered wallpaper platform, from content distribution to scaling for high-volume usage.'
     },
     {
         company: 'Trokit',
         title: 'Full Stack Developer',
         logo: trokit,
         description:
-            'Built and led a full-stack SaaS car management platform for garage operations and workflows, ensuring performance, reliability, and structured system design.'
+            'Built and led a full-stack SaaS car management platform for garages, with a focus on performance and reliability.'
     },
     {
         company: 'NuN Bookhouse',
         logo: nun,
         title: 'Developer',
         description:
-            'Developed and maintained custom software for the Bookhouse e-commerce platform, handling infrastructure and system architecture, and optimizing overall application performance.'
+            'Developed and maintained the Bookhouse e-commerce platform, owning its infrastructure and performance.'
     }
 ]
 
 export const technical: Record<TechnicalGroup['key'], Skill[]> = {
     languages: [
         { name: 'TypeScript, JavaScript', icon: 'typescript' },
-        { name: 'Next.js, Astro, Vite', icon: 'nextjs' },
-        { name: 'React, Native, Expo', icon: 'react' },
+        { name: 'React, Next.js, Native, Expo', icon: 'react' },
         { name: 'Node, Express, Electron', icon: 'nodejs' },
-        { name: 'Bun, Hono, Elysia', icon: 'bun' },
+        { name: 'Bun, Hono, Elysia, Astro, Vite', icon: 'bun' },
         { name: 'CLI’s, Rollup, Webpack', icon: 'rollup' }
     ],
     tools: [
-        { name: 'GraphQL, Apollo', icon: 'graphql' },
+        { name: 'GraphQL, Apollo, tRPC', icon: 'graphql' },
         { name: 'Firebase, Firestore', icon: 'firebase' },
         { name: 'Prisma, Neon, Turso', icon: 'prisma' },
         { name: 'Mongo, PostgreSQL', icon: 'mongodb' },
@@ -61,16 +67,13 @@ export const technical: Record<TechnicalGroup['key'], Skill[]> = {
         { name: 'Storybook, Vitest, Jest', icon: 'storybook' }
     ],
     devops: [
-        { name: 'Cloudflare', icon: 'cloudflare' },
-        { name: 'AWS', icon: 'aws' },
-        { name: 'Google Cloud', icon: 'googlecloud' },
-        { name: 'Vercel, Render, Railway', icon: 'vercel' },
-        { name: 'DigitalOcean, Fly.io', icon: 'digitalocean' }
+        { name: 'Cloudflare Workers, R2, D1', icon: 'cloudflare' },
+        { name: 'AWS, Google Cloud, Vercel, Bunny', icon: 'aws' },
+        { name: 'DigitalOcean, Fly.io, Render, Railway', icon: 'digitalocean' }
     ],
     others: [
-        { name: 'Claude, v0, z.ai', icon: 'claude' },
-        { name: 'Figma', icon: 'figma' },
-        { name: 'Webflow', icon: 'webflow' }
+        { name: 'Claude, Codex', icon: 'claude' },
+        { name: 'Figma, Webflow, Framer', icon: 'figma' }
     ]
 }
 

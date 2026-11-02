@@ -10,13 +10,14 @@ const { items } = Astro.props
 ---
 
 <section class='mt-6' data-reveal>
-    <List class='mt-1' data-reveal-group>
+    <List class='mt-3' data-reveal-group>
         {
             items.map((post) => (
                 <PostItem
                     slug={post.slug}
                     title={post.data.title}
                     description={post.data.description}
+                    date={post.data.date}
                 />
             ))
         }

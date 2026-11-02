@@ -71,10 +71,8 @@ export type TechIconName =
     | 'digitalocean'
     | 'figma'
     | 'firebase'
-    | 'googlecloud'
     | 'graphql'
     | 'mongodb'
-    | 'nextjs'
     | 'nodejs'
     | 'prisma'
     | 'react'
@@ -83,8 +81,6 @@ export type TechIconName =
     | 'storybook'
     | 'tailwind'
     | 'typescript'
-    | 'vercel'
-    | 'webflow'
 
 export interface Skill {
     name: string

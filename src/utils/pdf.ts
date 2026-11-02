@@ -52,8 +52,8 @@ const styles = {
 } satisfies Record<string, Style>
 
 const fonts = {
-    regular: fs.readFileSync('public/fonts/dm-sans/DMSans-Regular.ttf'),
-    bold: fs.readFileSync('public/fonts/dm-sans/DMSans-Bold.ttf')
+    regular: fs.readFileSync('public/fonts/onest/onest-latin-400-normal.woff'),
+    bold: fs.readFileSync('public/fonts/onest/onest-latin-600-normal.woff')
 }
 
 // Astro keeps the source path on imported images while it builds.

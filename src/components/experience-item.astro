@@ -7,7 +7,7 @@ const job = Astro.props as Experience
 
 <div class='flex gap-4'>
     <div
-        class='flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl text-xs font-semibold text-comment'
+        class='flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl border border-elevate text-xs font-semibold text-comment'
     >
         {
             job.logo ? (
@@ -27,10 +27,10 @@ const job = Astro.props as Experience
     </div>
 
     <div class='flex-1'>
-        <h3 class='font-bold text-default'>
+        <h3 class='font-semibold text-default'>
             {job.title} at {job.company}
         </h3>
 
-        <p class='mt-2 text-[15px] text-soft'>{job.description}</p>
+        <p class='mt-1 text-[15px] text-soft'>{job.description}</p>
     </div>
 </div>

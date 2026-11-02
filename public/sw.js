@@ -1,13 +1,10 @@
-const FONT_CACHE = 'fonts-v3'
+const FONT_CACHE = 'fonts-v4'
 const ASSET_CACHE = 'assets-v1'
 const KEEP = [FONT_CACHE, ASSET_CACHE]
 
 const fonts = [
-    '/fonts/dm-sans/DMSans-Regular.woff2',
-    '/fonts/dm-sans/DMSans-Medium.woff2',
-    '/fonts/dm-sans/DMSans-SemiBold.woff2',
-    '/fonts/dm-sans/DMSans-Bold.woff2',
-    '/fonts/dm-sans/DMSans-ExtraBold.woff2'
+    '/fonts/onest/onest-latin-wght-normal.woff2',
+    '/fonts/onest/onest-latin-ext-wght-normal.woff2'
 ]
 
 self.addEventListener('install', (event) => {

@@ -3,6 +3,7 @@ import azwedo from '@/assets/experiences/azwedo.webp'
 import dreampix from '@/assets/experiences/dreampix.webp'
 import modulify from '@/assets/experiences/modulify.webp'
 import nun from '@/assets/experiences/nun.webp'
+import openemail from '@/assets/experiences/openemail.webp'
 import trokit from '@/assets/experiences/trokit.webp'
 import betterfiletransfer from '@/assets/projects/betterfiletransfer.webp'
 import cloudagents from '@/assets/projects/cloudagents.webp'
@@ -29,6 +30,7 @@ export {
     dreampix,
     modulify,
     nun,
+    openemail,
     trokit,
     betterfiletransfer,
     cloudagents,

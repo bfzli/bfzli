@@ -2,16 +2,30 @@ import satori from 'satori'
 import sharp from 'sharp'
 import fs from 'node:fs'
 
-const boldFont = fs.readFileSync('public/fonts/dm-sans/DMSans-Bold.ttf')
-const regularFont = fs.readFileSync('public/fonts/dm-sans/DMSans-Regular.ttf')
+// Satori reads TTF, OTF and WOFF, but not WOFF2.
+const headingFont = fs.readFileSync(
+    'public/fonts/onest/onest-latin-600-normal.woff'
+)
+const bodyFont = fs.readFileSync(
+    'public/fonts/onest/onest-latin-400-normal.woff'
+)
 const avatarPng = sharp('src/assets/generals/avatar.webp').resize(96, 96).png()
 let avatarBase64: string
 
+// The font has no emoji glyphs, so Satori would draw them as empty boxes.
+const stripEmoji = (text: string) =>
+    text
+        .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+
 function descriptionNode(description: string) {
+    const clean = stripEmoji(description)
+    // Two lines fit about 180 characters; cut at a word boundary past that.
     const text =
-        description.length > 120
-            ? description.slice(0, 117) + '...'
-            : description
+        clean.length > 180
+            ? clean.slice(0, 179).replace(/\s+\S*$/, '') + '…'
+            : clean
     return {
         type: 'p',
         props: {
@@ -52,7 +66,7 @@ export async function generateOgImage(
                     justifyContent: 'center',
                     padding: '80px',
                     backgroundColor: '#fcfcfc',
-                    fontFamily: 'DM Sans'
+                    fontFamily: 'Onest'
                 },
                 children: [
                     {
@@ -72,12 +86,12 @@ export async function generateOgImage(
                         props: {
                             style: {
                                 fontSize: title.length > 40 ? '48px' : '56px',
-                                fontWeight: 700,
+                                fontWeight: 600,
                                 color: '#111',
                                 lineHeight: 1.2,
                                 margin: 0
                             },
-                            children: title
+                            children: stripEmoji(title)
                         }
                     },
                     ...(description ? [descriptionNode(description)] : [])
@@ -89,14 +103,14 @@ export async function generateOgImage(
             height: 630,
             fonts: [
                 {
-                    name: 'DM Sans',
-                    data: boldFont,
-                    weight: 700,
+                    name: 'Onest',
+                    data: headingFont,
+                    weight: 600,
                     style: 'normal'
                 },
                 {
-                    name: 'DM Sans',
-                    data: regularFont,
+                    name: 'Onest',
+                    data: bodyFont,
                     weight: 400,
                     style: 'normal'
                 }

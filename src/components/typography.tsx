@@ -3,10 +3,10 @@ import type { HeadingProps } from '@/types'
 
 const styles = {
     blockquote: 'border-l-4 border-elevate pl-4 font-medium my-2',
-    h1: 'font-bold mt-0 mb-4 text-4xl leading-tight',
-    h2: 'font-bold mt-10 mb-4 text-2xl',
-    h3: 'font-bold mt-10 mb-4 text-xl',
-    h4: 'font-bold mt-10 mb-4 text-lg',
+    h1: 'font-semibold mt-0 mb-4 text-4xl leading-tight',
+    h2: 'font-semibold mt-10 mb-4 text-2xl',
+    h3: 'font-semibold mt-10 mb-4 text-xl',
+    h4: 'font-semibold mt-10 mb-4 text-lg',
     h5: 'font-bold mt-8 mb-2 text-base',
     h6: 'font-bold mt-6 mb-2 text-base',
     hr: 'my-5 border-surface',

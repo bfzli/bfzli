@@ -23,7 +23,7 @@ export default {
                 pill: 'var(--pill)'
             },
             fontFamily: {
-                sans: ['DM Sans', 'DM Sans Fallback', ...fontFamily.sans],
+                sans: ['Onest', 'Onest Fallback', ...fontFamily.sans],
                 mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', 'monospace'],
             },
             minHeight: {
