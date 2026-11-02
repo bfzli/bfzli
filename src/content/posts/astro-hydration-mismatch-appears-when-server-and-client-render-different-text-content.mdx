@@ -1,0 +1,327 @@
+---
+title: "Astro Hydration Mismatch Appears When Server and Client Render Different Text Content"
+description: "Astro throws a hydration mismatch when a component renders different text on the server and in the browser."
+tags: ["astro", "hydration", "ssr", "client-side", "rendering"]
+date: Nov 2, 2026
+cell: "hydration-text-node::astro::server-client-output-diff"
+---
+
+Hydration failed because the initial UI does not match what was rendered on the server. Expected server HTML to contain a matching text node for `Tue, 14 Jan 2025 10:15:00 GMT` in `<span>`.
+
+## What Astro is comparing
+
+Astro sends HTML from the server first. That HTML is what the browser parses into the initial DOM. When an island component hydrates on the client, the framework re-renders the component and compares the result against the existing server-rendered DOM.
+
+If the text content is different, hydration emits a warning and may replace the node. In practice, the mismatch usually points at a text node inside an element, such as `<span>`, `<p>`, or `<time>`.
+
+The important detail is that hydration does not start from a blank slate. It replays the component output against markup that already exists in the document. Any difference between the server render and the client render becomes a mismatch.
+
+## Why text content diverges
+
+The server render and the browser render do not always run with the same inputs.
+
+A component that uses one of these sources can easily produce different text on each side:
+
+- `Date.now()` or `new Date()`
+- locale-sensitive formatting through `Intl.DateTimeFormat`
+- browser-only state such as `window.innerWidth`, `localStorage`, `navigator.language`, or `matchMedia`
+- random values from `Math.random()`
+- data that changes between the server response and hydration time
+
+The result is a server HTML string that says one thing and a client render that says another.
+
+For example, this component is not deterministic:
+
+```tsx
+---
+const now = new Date();
+const formatted = now.toLocaleString();
+---
+
+<span>{formatted}</span>
+```
+
+The server renders a timestamp using the server timezone and locale. The browser renders the same component using the client timezone and locale. The text can differ even if the code is identical.
+
+The same problem appears with browser state:
+
+```tsx
+---
+const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+---
+
+<span>{isDark ? 'Dark mode' : 'Light mode'}</span>
+```
+
+That component cannot produce the same output on the server, because `window` does not exist there. If the server substitutes a fallback and the browser computes a real value, the initial text differs.
+
+## How Astro hydration works in practice
+
+Astro is server-first. It renders page HTML on the server, then ships client scripts only for components marked with a directive such as `client:load`, `client:idle`, `client:visible`, or `client:only`.
+
+A hydrated component is rendered twice:
+
+1. once on the server for the initial HTML
+2. once in the browser to attach behavior
+
+The browser-side render must match the server-side HTML for the first paint. That means the initial output of the component must be deterministic. The same props, the same serialization, and the same text content need to appear on both sides.
+
+If the component’s initial text depends on a value that is not stable across environments, the comparison fails.
+
+## Reproducing the mismatch
+
+A minimal component that prints the current time can trigger the warning:
+
+```astro
+---
+const timestamp = new Date().toLocaleString();
+---
+
+<p>{timestamp}</p>
+```
+
+If this component is used inside a hydrated island, the server output and browser output can differ. The server may render one timestamp, then the browser renders another after the page loads.
+
+A browser-only value can fail in the same way:
+
+```tsx
+---
+const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : 'server';
+---
+
+<p>{userAgent}</p>
+```
+
+This avoids a runtime crash on the server, but it still produces different text on each side. `server` is not equal to the browser user agent string, so the first client render disagrees with the server HTML.
+
+A locale example is even easier to miss:
+
+```tsx
+---
+const value = new Date('2025-01-14T10:15:00Z').toLocaleString('en-US');
+---
+
+<time>{value}</time>
+```
+
+That output depends on timezone and browser environment unless you pin every formatting option. A server in `UTC` and a browser in `America/New_York` will format the same instant differently.
+
+## The exact fix: make the initial render deterministic
+
+The first render must not depend on ambient environment state. There are two reliable ways to do that.
+
+### 1. Move the data into props
+
+Compute the value before hydration and pass it into the component as a prop. The same prop value is then used by both renders.
+
+```astro
+---
+import Clock from '../components/Clock.tsx';
+
+const now = new Date().toISOString();
+---
+
+<Clock currentTime={now} client:load />
+```
+
+```tsx
+type Props = {
+  currentTime: string;
+};
+
+export default function Clock({ currentTime }: Props) {
+  return <time dateTime={currentTime}>{currentTime}</time>;
+}
+```
+
+Here, the component does not calculate time on its own. It receives the text as serialized data from Astro. Because the prop value is already fixed when the server render happens, the browser replay sees the same string.
+
+This pattern is the safest option for values that should appear in the initial HTML.
+
+### 2. Defer browser-only work until after hydration
+
+If the value truly depends on the browser, render a stable placeholder first and update it in an effect.
+
+```tsx
+import { useEffect, useState } from 'react';
+
+export default function ThemeLabel() {
+  const [label, setLabel] = useState('Loading');
+
+  useEffect(() => {
+    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    setLabel(isDark ? 'Dark mode' : 'Light mode');
+  }, []);
+
+  return <span>{label}</span>;
+}
+```
+
+The initial render is deterministic because it always returns `Loading`. After hydration, `useEffect` runs only in the browser and replaces the text with the real value.
+
+This is the right shape for data that cannot be known at render time on the server.
+
+## Use `client:only` when server HTML is not useful
+
+Sometimes the component should not render on the server at all. In that case, use `client:only` so Astro skips server rendering for that island.
+
+```astro
+---
+import ClockWidget from '../components/ClockWidget.tsx';
+---
+
+<ClockWidget client:only="react" />
+```
+
+With `client:only`, there is no server HTML to compare against for that component. That avoids hydration mismatch because there is no attempt to reconcile a server string with a client string.
+
+This is appropriate when the component is entirely browser-dependent. It is not a fix for a component that should still produce meaningful server HTML.
+
+## Keep locale formatting stable
+
+`Intl` formatting is a frequent source of mismatch because server and browser defaults differ.
+
+If the text must be rendered on the server, specify the locale, timezone, and format options explicitly.
+
+```ts
+const formatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'UTC',
+  dateStyle: 'medium',
+  timeStyle: 'short',
+});
+
+const text = formatter.format(new Date('2025-01-14T10:15:00Z'));
+```
+
+By pinning `locale` and `timeZone`, the output becomes predictable.
+
+If you omit `timeZone`, the same instant can format differently on machines in different regions. If you omit `locale`, the fallback locale may vary between server and browser. Both create the same class of hydration mismatch.
+
+## Check the initial output before hydrating
+
+The useful question is not whether the component can ever update. It is whether the first render is deterministic.
+
+A simple check is to compare the server render output against the client render output for the same initial props and state. If the component depends on changing environment state, the check fails.
+
+For React components, that means the first render must not read from browser globals or unstable values.
+
+A practical checklist:
+
+- `render(props)` returns the same markup for the same `props`
+- no `Date.now()` in the render path
+- no `new Date()` in the render path unless the input is passed in as a fixed prop
+- no `Math.random()` in the render path
+- no `window`, `document`, `navigator`, or `localStorage` during render
+- locale formatting uses explicit options
+- any placeholder text is identical on the server and during the first client render
+
+A component that passes this check can hydrate cleanly.
+
+## Pattern: server-provided data, client-enhanced behavior
+
+A common safe split is:
+
+- server renders the stable text
+- client adds interactive behavior after hydration
+
+Example:
+
+```astro
+---
+import SearchBox from '../components/SearchBox.tsx';
+
+const placeholder = 'Search docs';
+---
+
+<SearchBox placeholder={placeholder} client:load />
+```
+
+```tsx
+import { useEffect, useState } from 'react';
+
+type Props = {
+  placeholder: string;
+};
+
+export default function SearchBox({ placeholder }: Props) {
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    const saved = localStorage.getItem('query');
+    if (saved) setQuery(saved);
+  }, []);
+
+  return (
+    <label>
+      <span>{placeholder}</span>
+      <input value={query} onChange={(event) => setQuery(event.target.value)} />
+    </label>
+  );
+}
+```
+
+The label text is stable. The browser-only storage access happens in `useEffect`, after hydration. That keeps the initial DOM aligned.
+
+## What not to do
+
+Do not fix the warning by changing the server to guess at browser state.
+
+This is fragile:
+
+```tsx
+---
+const isDark = false;
+---
+
+<span>{isDark ? 'Dark mode' : 'Light mode'}</span>
+```
+
+If the browser actually prefers dark mode, the mismatch remains. A hardcoded fallback only hides the real dependency.
+
+Do not generate fresh text inside render and expect hydration to accept it.
+
+```tsx
+---
+const value = `${Math.random()}`;
+---
+
+<span>{value}</span>
+```
+
+The server and browser will almost never compute the same value. That guarantees a mismatch.
+
+Do not rely on implicit locale behavior.
+
+```tsx
+---
+const text = new Date().toLocaleString();
+---
+
+<time>{text}</time>
+```
+
+This is unstable across environments even when the code appears harmless.
+
+## Debugging the exact node
+
+The error message usually points to the node that differs, often a text node under an element like `<span>`. Inspect the rendered server HTML and compare it with the browser DOM after hydration starts.
+
+Useful places to look:
+
+- text generated from `Date`
+- conditionals based on `window`
+- formatting helpers that use locale defaults
+- values loaded from `localStorage`
+- random IDs or labels
+
+If the node contains a timestamp, a count, a locale-formatted string, or browser-derived state, assume the initial render is non-deterministic until proven otherwise.
+
+## Practical fix selection
+
+Prefer moving the data into props when the value should be part of the page’s initial HTML. That preserves server rendering and keeps hydration stable.
+
+Prefer `useEffect` for browser-only state that cannot be known during server render. Render a deterministic placeholder first, then update after hydration.
+
+Use `client:only` when the component is entirely browser-driven and server HTML would not be useful.
+
+The durable rule is simple: the first render must return the same text on the server and in the browser. If that cannot be guaranteed, the component needs either fixed props, client-only code, or a placeholder that does not change until after hydration.
