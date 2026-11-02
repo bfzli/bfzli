@@ -2,20 +2,6 @@
     "generatedAt": "2026-11-01T23:11:30.619Z",
     "ideas": [
         {
-            "cell": "hydration-text-node::astro::server-client-output-diff",
-            "title": "Astro Hydration Mismatch Appears When Server and Client Render Different Text Content",
-            "description": "Astro throws a hydration mismatch when a component renders different text on the server and in the browser.",
-            "tags": [
-                "astro",
-                "hydration",
-                "ssr",
-                "client-side",
-                "rendering"
-            ],
-            "angle": "Open with the hydration warning and the exact DOM node that differs. Explain how Astro renders server HTML first, then replays the client component, why non-deterministic text like timestamps, locale formatting, or browser-only state creates divergence, and how to move that data into props or client-only code. Include the check for deterministic initial render output.",
-            "slug": "astro-hydration-mismatch-appears-when-server-and-client-render-different-text-content"
-        },
-        {
             "cell": "missing-env-runtime::bun::production-process-env",
             "title": "Bun Reads process.env as Undefined at Runtime When the Variable Never Reaches the Process",
             "description": "Bun code sees `process.env` as undefined or empty when the variable is not exported into the runtime environment.",
@@ -88,19 +74,19 @@
     ],
     "drafted": [
         {
-            "cell": "vite-ssr-node-builtins-browser::vite::server-only-import-leak",
-            "title": "Vite Throws `Module \"fs\" has been externalized for browser compatibility` When Browser Code Imports Node Built-ins",
-            "description": "Explain why Vite externalizes Node built-ins in browser bundles and how to keep server-only modules out of client code.",
+            "cell": "hydration-text-node::astro::server-client-output-diff",
+            "title": "Astro Hydration Mismatch Appears When Server and Client Render Different Text Content",
+            "description": "Astro throws a hydration mismatch when a component renders different text on the server and in the browser.",
             "tags": [
-                "vite",
-                "browser-bundle",
-                "node-builtins",
+                "astro",
+                "hydration",
                 "ssr",
-                "rollup"
+                "client-side",
+                "rendering"
             ],
-            "angle": "Open with the exact Vite error and the import chain that reaches `fs`, `path`, or another Node built-in. Explain how Vite decides what belongs in the client bundle and why server-only modules must not be pulled through a shared entry point. Show how to separate client and server imports, use conditional code paths or `.server` files where appropriate, and confirm the bundle no longer includes Node-only dependencies.",
-            "slug": "vite-throws-module-fs-has-been-externalized-for-browser-compatibility-when-browser-code-imports-node-built-ins",
-            "draftedAt": "2026-11-01T00:35:14.147Z"
+            "angle": "Open with the hydration warning and the exact DOM node that differs. Explain how Astro renders server HTML first, then replays the client component, why non-deterministic text like timestamps, locale formatting, or browser-only state creates divergence, and how to move that data into props or client-only code. Include the check for deterministic initial render output.",
+            "slug": "astro-hydration-mismatch-appears-when-server-and-client-render-different-text-content",
+            "draftedAt": "2026-11-02T01:09:33.192Z"
         }
     ]
 }
