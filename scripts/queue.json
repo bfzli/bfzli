@@ -2,20 +2,6 @@
     "generatedAt": "2026-11-01T23:11:30.619Z",
     "ideas": [
         {
-            "cell": "missing-env-runtime::bun::production-process-env",
-            "title": "Bun Reads process.env as Undefined at Runtime When the Variable Never Reaches the Process",
-            "description": "Bun code sees `process.env` as undefined or empty when the variable is not exported into the runtime environment.",
-            "tags": [
-                "bun",
-                "environment-variables",
-                "runtime",
-                "process-env",
-                "deployment"
-            ],
-            "angle": "Open with the missing variable observed in Bun at runtime, not during build. Explain Bun's process environment model, how shell export, `.env` loading, and container or platform injection differ, and why a variable present in a local shell can disappear in a service process. Show the exact places to define, load, and verify the variable before the app starts.",
-            "slug": "bun-reads-process-env-as-undefined-at-runtime-when-the-variable-never-reaches-the-process"
-        },
-        {
             "cell": "postgres-ssl-required::node-postgres::cloud-hosted-db",
             "title": "Node.js Fails to Connect to Postgres with no pg_hba.conf Entry Unless SSL Is Enabled",
             "description": "A managed Postgres server rejects connections until the client uses the SSL settings the provider requires.",
@@ -74,19 +60,19 @@
     ],
     "drafted": [
         {
-            "cell": "hydration-text-node::astro::server-client-output-diff",
-            "title": "Astro Hydration Mismatch Appears When Server and Client Render Different Text Content",
-            "description": "Astro throws a hydration mismatch when a component renders different text on the server and in the browser.",
+            "cell": "missing-env-runtime::bun::production-process-env",
+            "title": "Bun Reads process.env as Undefined at Runtime When the Variable Never Reaches the Process",
+            "description": "Bun code sees `process.env` as undefined or empty when the variable is not exported into the runtime environment.",
             "tags": [
-                "astro",
-                "hydration",
-                "ssr",
-                "client-side",
-                "rendering"
+                "bun",
+                "environment-variables",
+                "runtime",
+                "process-env",
+                "deployment"
             ],
-            "angle": "Open with the hydration warning and the exact DOM node that differs. Explain how Astro renders server HTML first, then replays the client component, why non-deterministic text like timestamps, locale formatting, or browser-only state creates divergence, and how to move that data into props or client-only code. Include the check for deterministic initial render output.",
-            "slug": "astro-hydration-mismatch-appears-when-server-and-client-render-different-text-content",
-            "draftedAt": "2026-11-02T01:09:33.192Z"
+            "angle": "Open with the missing variable observed in Bun at runtime, not during build. Explain Bun's process environment model, how shell export, `.env` loading, and container or platform injection differ, and why a variable present in a local shell can disappear in a service process. Show the exact places to define, load, and verify the variable before the app starts.",
+            "slug": "bun-reads-process-env-as-undefined-at-runtime-when-the-variable-never-reaches-the-process",
+            "draftedAt": "2026-11-03T03:14:19.546Z"
         }
     ]
 }
