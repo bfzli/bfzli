@@ -1,0 +1,398 @@
+---
+title: "Bun Reads process.env as Undefined at Runtime When the Variable Never Reaches the Process"
+description: "Bun code sees `process.env` as undefined or empty when the variable is not exported into the runtime environment."
+tags: ["bun", "environment-variables", "runtime", "process-env", "deployment"]
+date: Nov 3, 2026
+cell: "missing-env-runtime::bun::production-process-env"
+---
+
+`process.env.MY_VAR` is `undefined` at runtime in Bun, and code that expects a value fails with errors such as `TypeError: Cannot read properties of undefined` or downstream validation failures when the variable never reaches the process.
+
+## What Bun reads at runtime
+
+Bun does not invent environment variables from the editor, the build output, or the current shell history. It reads the environment attached to the running process.
+
+That means `process.env` is only as complete as the environment provided to the Bun process itself. If the variable is missing there, `process.env.MY_VAR` is `undefined`, even if the same variable exists in another terminal window, a parent shell, a local `.env` file that was never loaded, or a deployment setting that was applied to the wrong service.
+
+In Bun, `process.env` is the Node-compatible environment object. The runtime exposes it so code can read variables like:
+
+```ts
+const apiKey = process.env.API_KEY;
+
+if (!apiKey) {
+  throw new Error("API_KEY is required");
+}
+```
+
+If `API_KEY` is not present in the process environment, that code throws because the variable is absent at runtime, not because Bun failed to parse the file.
+
+## Why a variable disappears before the app starts
+
+A variable can vanish for several different reasons. The common thread is that the runtime process never received it.
+
+### Shell variables must be exported
+
+A shell assignment and an exported environment variable are not the same thing.
+
+```bash
+API_KEY=abc123
+bun run start
+```
+
+In many shells, that `API_KEY=abc123` assignment applies only to the current shell variable table, not to child processes, unless it is exported. A child process only inherits exported variables.
+
+Use:
+
+```bash
+export API_KEY=abc123
+bun run start
+```
+
+Or set it for one command:
+
+```bash
+API_KEY=abc123 bun run start
+```
+
+That syntax places the variable in the environment of the `bun` process directly.
+
+If the variable is missing from `process.env`, check whether it was ever exported into the command that launched Bun.
+
+### `.env` files are not automatic in every execution path
+
+A local `.env` file is just a file until something loads it. If the app starts through a path that does not read `.env`, `process.env` stays empty for those keys.
+
+Bun can load `.env` values, but the point at which loading happens matters. If your code reads `process.env.API_KEY` before the file is loaded, the value is still absent.
+
+Use a startup path that loads environment values before importing code that depends on them, or load them explicitly at the top of the entrypoint.
+
+For example:
+
+```ts
+// src/index.ts
+import "dotenv/config";
+
+const apiKey = process.env.API_KEY;
+
+if (!apiKey) {
+  throw new Error("API_KEY is required");
+}
+
+console.log("API_KEY loaded");
+```
+
+If you use `dotenv`, install the package:
+
+```bash
+bun add dotenv
+```
+
+The important point is not the package itself. It is the timing. Environment loading has to happen before the application reads the variable.
+
+### Containers have their own environment scope
+
+A variable that exists on the host machine does not automatically enter a container.
+
+This fails:
+
+```bash
+export API_KEY=abc123
+docker run my-image
+```
+
+The container process only gets environment variables passed with `-e`, `--env-file`, or image/runtime configuration.
+
+Use one of these:
+
+```bash
+docker run -e API_KEY=abc123 my-image
+```
+
+or:
+
+```bash
+docker run --env-file .env my-image
+```
+
+The same rule applies to Bun running inside the container. The runtime only sees what the container process receives.
+
+### Services and platform deployments inject variables separately
+
+Many platforms store variables in a dashboard, secret manager, or service configuration, then inject them into the running service at startup. A value set in the web UI for one app, environment, region, or build stage does not affect another.
+
+That creates a common mismatch:
+
+- the local shell has the variable
+- the build pipeline has the variable
+- the service runtime does not
+
+For Bun, runtime is what matters. If the platform injects variables only during build, but your code reads `process.env` when the server starts, the variable must also be present in the runtime phase.
+
+## Bun’s process environment model
+
+Bun follows the operating system process environment model. `process.env` is a string-keyed map exposed to JavaScript. The values are attached to the process when it starts, and they are inherited from the parent process that launched Bun.
+
+The implications are straightforward:
+
+- if the parent shell exported the variable, Bun can read it
+- if a container runtime passed the variable, Bun can read it
+- if a `.env` loader ran before the code accessed the value, Bun can read it
+- if none of those happened, `process.env.VAR_NAME` is `undefined`
+
+Bun does not synchronize with a random `.env` file on disk unless something loads that file. It does not read values from the host shell after startup. It does not merge platform dashboard settings unless they are injected into the process environment.
+
+A variable can therefore be present in one place and absent in another:
+
+| Source | Visible to Bun at runtime? | Notes |
+| --- | --- | --- |
+| `export API_KEY=...` in the launching shell | Yes | Inherited by child processes |
+| `API_KEY=... bun run start` | Yes | Variable is attached to that command only |
+| `.env` file on disk | No, not by itself | Needs explicit loading or framework support |
+| Host machine shell | No, if Bun runs elsewhere | Host and runtime are separate environments |
+| Dockerfile `ENV API_KEY=...` | Yes | Baked into the image layer |
+| `docker run -e API_KEY=...` | Yes | Passed to that container process |
+| Platform build-time variable only | Maybe not | Build and runtime are separate phases |
+
+## Define the variable in the right place
+
+Choose the place where the process starts, not where the source code lives.
+
+### For local development
+
+If the variable should exist for the whole shell session:
+
+```bash
+export API_KEY=abc123
+bun run dev
+```
+
+If the variable should apply only to one command:
+
+```bash
+API_KEY=abc123 bun run dev
+```
+
+If you want file-based local configuration, keep it in `.env` and load it at startup:
+
+```env
+API_KEY=abc123
+PORT=3000
+```
+
+```ts
+import "dotenv/config";
+
+const port = Number(process.env.PORT ?? "3000");
+const apiKey = process.env.API_KEY;
+
+if (!apiKey) {
+  throw new Error("API_KEY is required");
+}
+
+console.log({ port, apiKey });
+```
+
+### For Docker
+
+Set the environment in the container definition or pass it at runtime.
+
+`Dockerfile` example:
+
+```dockerfile
+FROM oven/bun:1.1.34
+
+WORKDIR /app
+COPY package.json bun.lockb ./
+RUN bun install
+
+COPY . .
+
+ENV PORT=3000
+CMD ["bun", "run", "start"]
+```
+
+Runtime override example:
+
+```bash
+docker run -e API_KEY=abc123 -p 3000:3000 my-image
+```
+
+If you prefer file-based injection:
+
+```bash
+docker run --env-file .env -p 3000:3000 my-image
+```
+
+### For system services
+
+If the app runs under `systemd`, define the variable in the unit file or environment file used by the service.
+
+Example:
+
+```ini
+[Service]
+Environment=API_KEY=abc123
+ExecStart=/usr/local/bin/bun run start
+```
+
+Or:
+
+```ini
+[Service]
+EnvironmentFile=/etc/myapp/env
+ExecStart=/usr/local/bin/bun run start
+```
+
+The service process only sees what the service manager passes to it.
+
+### For hosted platforms
+
+Set the variable in the runtime environment configuration for the service, not only in build settings. Many platforms split these into separate scopes, such as build, preview, production, or region-specific settings.
+
+If the variable is available during `bun install` but not during the server process, runtime reads still fail. The application needs it at the moment `bun run start` begins.
+
+## Load `.env` before anything reads `process.env`
+
+A common failure mode is importing modules that read environment variables at module scope before the loader runs.
+
+This is problematic:
+
+```ts
+// config.ts
+export const apiKey = process.env.API_KEY;
+if (!apiKey) throw new Error("API_KEY is required");
+```
+
+```ts
+// index.ts
+import "./config";
+import "dotenv/config";
+```
+
+By the time `dotenv/config` runs, `config.ts` has already been evaluated.
+
+Instead, load first:
+
+```ts
+// index.ts
+import "dotenv/config";
+import "./config";
+```
+
+Or keep the startup sequence in a single file:
+
+```ts
+import "dotenv/config";
+
+const required = ["API_KEY", "DATABASE_URL"] as const;
+
+for (const key of required) {
+  if (!process.env[key]) {
+    throw new Error(`${key} is required`);
+  }
+}
+```
+
+If your framework already handles `.env`, verify the load order. The rule is the same: values must exist before the first access.
+
+## Verify the variable before the app starts
+
+Do not wait for business logic to discover the value is missing. Fail early in the entrypoint.
+
+```ts
+import "dotenv/config";
+
+const apiKey = process.env.API_KEY;
+const databaseUrl = process.env.DATABASE_URL;
+
+if (!apiKey) {
+  throw new Error("Missing required environment variable: API_KEY");
+}
+
+if (!databaseUrl) {
+  throw new Error("Missing required environment variable: DATABASE_URL");
+}
+
+console.log("Environment validated");
+```
+
+For debugging, print the keys you expect, not the whole environment:
+
+```ts
+const keys = ["API_KEY", "DATABASE_URL", "PORT"] as const;
+
+for (const key of keys) {
+  console.log(key, process.env[key] ? "present" : "missing");
+}
+```
+
+If you need to inspect the environment from the shell that launches Bun, use the same command path:
+
+```bash
+env | grep '^API_KEY='
+bun run start
+```
+
+Inside a container, inspect the container environment, not the host:
+
+```bash
+docker exec -it my-container env | grep '^API_KEY='
+```
+
+If the variable is missing there, the application cannot read it.
+
+## Common failure patterns
+
+### Reading from `process.env` in a module before loading `.env`
+
+This causes `undefined` because the import order runs top to bottom. The fix is to load first.
+
+### Setting a variable in one terminal and running Bun in another
+
+A variable in a shell session does not cross to another session unless it is also configured in that environment or exported in the session that launches the process.
+
+### Assuming Docker inherits host variables automatically
+
+Docker does not import host environment variables unless you pass them through explicitly.
+
+### Expecting build-time variables to exist at runtime
+
+A build step can succeed with a variable present, then the running service can still fail if runtime injection was never configured.
+
+### Using a `.env` file but not loading it
+
+A file on disk is not an environment. It must be read into the process.
+
+## A reliable startup pattern
+
+A simple entrypoint keeps the behavior predictable:
+
+```ts
+import "dotenv/config";
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
+const config = {
+  apiKey: requireEnv("API_KEY"),
+  databaseUrl: requireEnv("DATABASE_URL"),
+  port: Number(process.env.PORT ?? "3000"),
+};
+
+console.log("Starting with config:", {
+  apiKey: "[redacted]",
+  databaseUrl: "[redacted]",
+  port: config.port,
+});
+```
+
+This works because it enforces the contract where the contract matters: at process startup. The app either receives the variable or stops immediately with a specific error.
+
+## Practical takeaway
+
+Prefer setting the variable in the same runtime scope that launches Bun, then load `.env` before any module reads `process.env`, and validate required keys at startup. Use `export` or inline assignment for local shells, `-e` or `--env-file` for containers, and the runtime environment settings for hosted services. That keeps `process.env` from becoming `undefined` simply because the variable never reached the process.
