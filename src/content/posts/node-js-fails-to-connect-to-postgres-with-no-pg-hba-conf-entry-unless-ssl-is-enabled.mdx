@@ -1,0 +1,363 @@
+---
+title: "Node.js Fails to Connect to Postgres with no pg_hba.conf Entry Unless SSL Is Enabled"
+description: "A managed Postgres server rejects connections until the client uses the SSL settings the provider requires."
+tags: ["nodejs", "postgres", "ssl", "database", "pg"]
+date: Nov 4, 2026
+cell: "postgres-ssl-required::node-postgres::cloud-hosted-db"
+---
+
+`node-postgres` fails to connect to a managed Postgres server at `db.example.com:5432` with `error: no pg_hba.conf entry for host "203.0.113.10", user "app_user", database "app_db", SSL off`
+
+## What the error means
+
+That error comes from PostgreSQL during connection setup, after the TCP socket is already open. It does not mean DNS failed, the port is closed, or the credentials are wrong. It means PostgreSQL received a connection attempt that did not match any `pg_hba.conf` rule on the server.
+
+`pg_hba.conf` is the host-based authentication policy file. Each entry defines which client addresses, users, databases, and authentication methods are allowed. In managed Postgres services, you often do not control the file directly. The provider enforces the equivalent policy behind the scenes.
+
+The important detail in the error text is `SSL off`. That means the client connected without TLS. Many managed PostgreSQL services require TLS for every remote connection. They either reject non-TLS connections before authentication or only expose `pg_hba.conf` rules that match SSL connections. When the client uses plain TCP, the server can reach the authentication phase but still reject the session because no matching non-SSL rule exists.
+
+## Why TCP succeeds but Postgres still rejects the session
+
+A PostgreSQL connection has multiple stages:
+
+1. TCP connection to the server port, usually `5432`
+2. Startup packet with database name, user name, and protocol version
+3. Optional SSL negotiation
+4. Authentication
+5. `pg_hba.conf` rule selection
+6. Session establishment
+
+The socket can open successfully even if the server will later deny the connection. That is why tools like `nc` or a raw TCP check can report that the port is reachable while `psql` or `pg` still fails.
+
+With managed databases, the provider typically configures one of these patterns:
+
+- SSL required for all external clients
+- Separate `pg_hba.conf` rules for SSL and non-SSL, with only SSL rules enabled for public access
+- Client certificate requirements for certain plans or private endpoints
+- IP allowlisting plus SSL, where the source address and TLS mode both must match
+
+If the client connects without TLS, PostgreSQL may show a rejection like:
+
+```text
+no pg_hba.conf entry for host "203.0.113.10", user "app_user", database "app_db", SSL off
+```
+
+If the client uses TLS but the address or username does not match, the error changes to something like:
+
+```text
+no pg_hba.conf entry for host "203.0.113.10", user "app_user", database "app_db", SSL on
+```
+
+That distinction matters. `SSL off` means the connection never negotiated TLS. `SSL on` means TLS succeeded, but some other part of the rule did not match.
+
+## How managed Postgres enforces SSL
+
+Providers use a few common mechanisms.
+
+Some services disable non-TLS host rules entirely. PostgreSQL can advertise both SSL and non-SSL rules in `pg_hba.conf`, but the managed platform only permits the SSL path. From the client perspective, the server behaves as if there is no acceptable rule unless the session negotiates TLS.
+
+Some providers also require specific `sslmode` values. For PostgreSQL clients, `sslmode` controls whether TLS is optional, required, or verified.
+
+Common values:
+
+- `disable`: never use TLS
+- `require`: use TLS, but do not validate the certificate chain or hostname
+- `verify-ca`: use TLS and verify the certificate authority
+- `verify-full`: use TLS, verify the certificate authority, and verify the hostname matches the certificate
+
+For managed Postgres, `require` often solves the immediate connection rejection. `verify-full` is the stronger configuration when the provider’s certificate and hostname are set up for it.
+
+The `pg` package, which is the standard PostgreSQL driver for Node.js, does not automatically assume TLS for arbitrary connection strings. If you omit SSL settings, it can attempt a plain connection, which produces the `SSL off` rejection on providers that require TLS.
+
+## Reproducing the problem from Node.js
+
+The `pg` package connects without TLS unless you configure it to do otherwise. A basic client like this can fail against a managed server that requires SSL:
+
+```ts
+import { Client } from "pg";
+
+async function main() {
+  const client = new Client({
+    host: "db.example.com",
+    port: 5432,
+    user: "app_user",
+    password: process.env.PG_PASSWORD,
+    database: "app_db",
+  });
+
+  await client.connect();
+  const result = await client.query("select now()");
+  console.log(result.rows);
+  await client.end();
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+```
+
+Typical output:
+
+```text
+error: no pg_hba.conf entry for host "203.0.113.10", user "app_user", database "app_db", SSL off
+```
+
+The same happens with a `postgresql://` URL if it does not request TLS and the provider requires it.
+
+## Configuring `pg` correctly
+
+The first fix is to enable TLS in the connection options.
+
+If the provider requires encrypted transport but you do not have CA files yet, set `ssl` to `require`-style behavior through `rejectUnauthorized: false`. This gets the connection working, but it skips certificate verification.
+
+```ts
+import { Client } from "pg";
+
+async function main() {
+  const client = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false,
+    },
+  });
+
+  await client.connect();
+
+  const result = await client.query("select version(), current_database(), inet_server_addr()");
+  console.log(result.rows[0]);
+
+  await client.end();
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+```
+
+This is often enough to confirm that the only problem is TLS negotiation. It is not the strongest long-term setup.
+
+If the provider gives you a root CA certificate, use it and keep verification on:
+
+```ts
+import { readFileSync } from "node:fs";
+import { Client } from "pg";
+
+async function main() {
+  const client = new Client({
+    host: "db.example.com",
+    port: 5432,
+    user: "app_user",
+    password: process.env.PG_PASSWORD,
+    database: "app_db",
+    ssl: {
+      ca: readFileSync("./ca.crt", "utf8"),
+      rejectUnauthorized: true,
+    },
+  });
+
+  await client.connect();
+  const result = await client.query("select current_setting('ssl')");
+  console.log(result.rows[0]);
+  await client.end();
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+```
+
+If the provider uses a public certificate chain trusted by Node.js, you may only need `ssl: true`, but that depends on the service and certificate configuration.
+
+## Configuring `postgresql://` URLs correctly
+
+Connection strings can express the same settings. The `pg` package reads parameters from the URL query string.
+
+For a managed service that requires TLS but does not require hostname verification, use:
+
+```text
+postgresql://app_user:password@db.example.com:5432/app_db?sslmode=require
+```
+
+For stricter verification, use:
+
+```text
+postgresql://app_user:password@db.example.com:5432/app_db?sslmode=verify-full
+```
+
+If the provider needs a CA certificate and you are using `pg`, the URL alone is not enough. The URL can request SSL mode, but certificate material still needs to be supplied through client configuration or environment-specific setup.
+
+A common pattern is:
+
+```ts
+import { Client } from "pg";
+
+const client = new Client({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: true,
+  },
+});
+```
+
+If you are using a URL that already includes `sslmode=require`, keep the explicit `ssl` option in Node.js when you need deterministic behavior across environments.
+
+Be careful with `sslmode=disable`. If the URL contains that value, it will override an expectation that the driver should use TLS. That produces the exact rejection discussed here.
+
+## Why `sslmode=require` works
+
+`sslmode=require` changes the client handshake. Instead of sending a plain startup packet immediately, the client asks the server to switch to TLS first. If the server accepts, the rest of the session runs inside the encrypted tunnel.
+
+That matters because PostgreSQL host rules can distinguish between SSL and non-SSL traffic. Managed services often only expose an SSL-enabled rule. Once TLS is active, the connection matches the provider’s policy and moves past the `pg_hba.conf` check.
+
+`sslmode=require` is enough to satisfy many hosted services, but it does not prove you are talking to the intended server. If the endpoint is public and the certificate chain matters, use `verify-full` and provide the CA certificate.
+
+## How to verify TLS from Node.js
+
+You can confirm that the session is encrypted by querying PostgreSQL and by inspecting the underlying TLS socket.
+
+The database side exposes SSL status through `pg_stat_ssl`:
+
+```ts
+import { Client } from "pg";
+
+async function main() {
+  const client = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false,
+    },
+  });
+
+  await client.connect();
+
+  const result = await client.query(`
+    select
+      ssl,
+      version,
+      cipher
+    from pg_stat_ssl
+    where pid = pg_backend_pid()
+  `);
+
+  console.log(result.rows[0]);
+  await client.end();
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+```
+
+A successful TLS session returns something like:
+
+```json
+{
+  "ssl": true,
+  "version": "TLSv1.3",
+  "cipher": "TLS_AES_256_GCM_SHA384"
+}
+```
+
+If `ssl` is `false`, the connection is not encrypted.
+
+You can also check the socket in `pg` after `connect()`:
+
+```ts
+import { Client } from "pg";
+
+async function main() {
+  const client = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false,
+    },
+  });
+
+  await client.connect();
+
+  const socket = client.connection.stream;
+  console.log({
+    authorized: socket.authorized,
+    encrypted: typeof socket.getCipher === "function",
+    cipher: socket.getCipher?.(),
+  });
+
+  await client.end();
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+```
+
+`socket.authorized` is `true` only when Node has verified the certificate chain successfully. If `rejectUnauthorized` is `false`, that value will usually be `false`, even though the transport is encrypted. For actual certificate verification, keep `rejectUnauthorized: true` and supply a trusted CA or use a publicly trusted chain.
+
+## Common configuration mistakes
+
+A few settings produce the same rejection.
+
+If you use `pg` with a `connectionString` and also pass an `ssl` object, the two need to agree. An explicit `sslmode=disable` in the string can override expectations.
+
+If you connect through a pool, the same SSL settings must be on the `Pool`:
+
+```ts
+import { Pool } from "pg";
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
+```
+
+If the provider requires a CA certificate and you omit it, the client may connect only when verification is disabled. That hides the real security configuration problem.
+
+If you are behind a proxy or serverless platform, the source IP may change. In that case, the server can reject the connection even after TLS is enabled because the provider’s network allowlist does not include the current egress address. The error text can still mention `pg_hba.conf`, so TLS alone is not always the full fix.
+
+## Minimal working configuration
+
+For a managed Postgres service that requires SSL, the most direct fix is to use `sslmode=require` or `ssl: { rejectUnauthorized: false }` if you only need to restore connectivity.
+
+A practical baseline looks like this:
+
+```ts
+import { Client } from "pg";
+
+const client = new Client({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
+
+await client.connect();
+```
+
+If the provider supplies a CA certificate, upgrade to certificate verification:
+
+```ts
+import { readFileSync } from "node:fs";
+import { Client } from "pg";
+
+const client = new Client({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    ca: readFileSync("/etc/ssl/postgres-ca.crt", "utf8"),
+    rejectUnauthorized: true,
+  },
+});
+
+await client.connect();
+```
+
+That keeps the connection encrypted and validates the server certificate instead of relying on an unauthenticated TLS tunnel.
+
+## Practical takeaway
+
+Prefer `sslmode=verify-full` or `ssl` with a trusted CA when the managed provider supports it. Use `sslmode=require` or `rejectUnauthorized: false` only when you need the simplest path to get past a provider that rejects non-TLS sessions with `no pg_hba.conf entry ... SSL off`. The error means the server rejected a plain connection before it matched any allowed host rule, so the fix is to make Node negotiate TLS and, when possible, verify the certificate instead of leaving encryption in an unverified state.
