@@ -2,20 +2,6 @@
     "generatedAt": "2026-11-01T23:11:30.619Z",
     "ideas": [
         {
-            "cell": "postgres-ssl-required::node-postgres::cloud-hosted-db",
-            "title": "Node.js Fails to Connect to Postgres with no pg_hba.conf Entry Unless SSL Is Enabled",
-            "description": "A managed Postgres server rejects connections until the client uses the SSL settings the provider requires.",
-            "tags": [
-                "nodejs",
-                "postgres",
-                "ssl",
-                "database",
-                "pg"
-            ],
-            "angle": "Open with the exact Postgres connection rejection and the server address. Explain how managed databases enforce SSL or require specific `sslmode` settings, why a plain TCP connection reaches authentication but fails at `pg_hba.conf`, and how to configure `pg` or `postgresql://` URLs correctly. Show how to verify the negotiated TLS connection from Node.",
-            "slug": "node-js-fails-to-connect-to-postgres-with-no-pg-hba-conf-entry-unless-ssl-is-enabled"
-        },
-        {
             "cell": "ruby-gem-abi::native-addon::mismatched-platform",
             "title": "Ruby Fails to Load a Native Gem Because the Platform ABI Does Not Match the Installed Extension",
             "description": "A compiled Ruby gem cannot load when the native extension was built for a different platform or Ruby ABI.",
@@ -60,19 +46,19 @@
     ],
     "drafted": [
         {
-            "cell": "missing-env-runtime::bun::production-process-env",
-            "title": "Bun Reads process.env as Undefined at Runtime When the Variable Never Reaches the Process",
-            "description": "Bun code sees `process.env` as undefined or empty when the variable is not exported into the runtime environment.",
+            "cell": "postgres-ssl-required::node-postgres::cloud-hosted-db",
+            "title": "Node.js Fails to Connect to Postgres with no pg_hba.conf Entry Unless SSL Is Enabled",
+            "description": "A managed Postgres server rejects connections until the client uses the SSL settings the provider requires.",
             "tags": [
-                "bun",
-                "environment-variables",
-                "runtime",
-                "process-env",
-                "deployment"
+                "nodejs",
+                "postgres",
+                "ssl",
+                "database",
+                "pg"
             ],
-            "angle": "Open with the missing variable observed in Bun at runtime, not during build. Explain Bun's process environment model, how shell export, `.env` loading, and container or platform injection differ, and why a variable present in a local shell can disappear in a service process. Show the exact places to define, load, and verify the variable before the app starts.",
-            "slug": "bun-reads-process-env-as-undefined-at-runtime-when-the-variable-never-reaches-the-process",
-            "draftedAt": "2026-11-03T03:14:19.546Z"
+            "angle": "Open with the exact Postgres connection rejection and the server address. Explain how managed databases enforce SSL or require specific `sslmode` settings, why a plain TCP connection reaches authentication but fails at `pg_hba.conf`, and how to configure `pg` or `postgresql://` URLs correctly. Show how to verify the negotiated TLS connection from Node.",
+            "slug": "node-js-fails-to-connect-to-postgres-with-no-pg-hba-conf-entry-unless-ssl-is-enabled",
+            "draftedAt": "2026-11-04T01:46:48.668Z"
         }
     ]
 }
