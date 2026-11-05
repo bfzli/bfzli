@@ -1,0 +1,281 @@
+---
+title: "Ruby Fails to Load a Native Gem Because the Platform ABI Does Not Match the Installed Extension"
+description: "A compiled Ruby gem cannot load when the native extension was built for a different platform or Ruby ABI."
+tags: ["ruby", "gem", "native-extension", "abi", "build"]
+date: Nov 5, 2026
+cell: "ruby-gem-abi::native-addon::mismatched-platform"
+---
+
+`bundle exec` or `ruby -e` fails while loading a native gem with an error such as `LoadError: cannot load such file -- nokogiri/nokogiri` or `dlopen(...): incompatible library version`, and the shared object under `vendor/bundle` was built for a different Ruby ABI, operating system, or CPU architecture.
+
+## What the error means
+
+A native gem includes compiled code, usually a `.so` extension on Unix-like systems or a `.bundle` on macOS. Ruby loads that extension through `require`, but the dynamic loader only accepts binaries that match the current process environment.
+
+The matching rules are strict:
+
+- Ruby ABI must match the version used to compile the extension.
+- CPU architecture must match, such as `x86_64` versus `arm64`.
+- Operating system and libc must match, such as macOS versus Linux, or `glibc` versus `musl`.
+- The extension must have been built against compatible headers and shared libraries.
+
+If any of those differ, Ruby can still find the gem directory, but it cannot load the compiled file inside it. The result is usually a `LoadError`, `dlopen` failure, or a message from the extension itself about an incompatible binary.
+
+Typical examples include:
+
+```text
+LoadError: cannot load such file -- nokogiri/nokogiri
+```
+
+```text
+dlopen(/app/vendor/bundle/ruby/3.3.0/gems/pg-1.5.6/lib/pg_ext.so, 0x0009): incompatible library version
+```
+
+```text
+LoadError: incompatible library version - /app/vendor/bundle/ruby/3.2.0/gems/json-2.7.2/lib/json/ext/parser.so
+```
+
+The name in the error is the important part. If the path points into an installed bundle, the failure is not usually about Ruby finding the gem. It is about loading the compiled extension that the gem ships or generates.
+
+## How native gems are built
+
+A native gem is not pure Ruby. It has Ruby code plus a compiled extension built from C, C++, Rust, or another native language. During installation, Bundler or RubyGems runs the build toolchain for the current platform.
+
+For a gem such as `pg`, the native extension links against system headers and libraries like `libpq`. For `nokogiri`, the build may bundle or link against `libxml2` and `libxslt`. For `grpc`, it compiles a substantial extension against the current Ruby ABI and target platform.
+
+The compiled artifact is tied to the environment in several ways:
+
+- Ruby version and ABI: Ruby `3.2` and `3.3` do not share extension compatibility.
+- Platform triple: `x86_64-linux`, `aarch64-linux-musl`, `x86_64-darwin`, and `arm64-darwin` are different targets.
+- C library and linker expectations: `glibc` and `musl` produce different binaries.
+- System libraries: if the extension linked to a specific `libssl`, `libpq`, or `libxml2`, those versions matter too.
+
+That means a bundle installed on one machine is not a portable artifact unless every relevant target detail stays the same.
+
+## Why copied `vendor/bundle` trees break
+
+A common failure mode is copying a preinstalled `vendor/bundle` directory between environments. That directory may contain gems, gem specifications, and compiled extensions from the source machine.
+
+This breaks when any of the following changes:
+
+- local development on `arm64-darwin`, deployment on `x86_64-linux`
+- Ruby `3.2.2` locally, Ruby `3.3.6` in production
+- macOS build host, Linux container runtime
+- `glibc` container base image changed from Debian to Alpine
+- system package upgrade changed a linked library version
+
+Bundler does not rewrite a compiled extension when the directory is copied. Ruby just sees the file on disk and tries to load it. The dynamic loader then rejects it.
+
+This also happens with cached CI artifacts. If a job caches `vendor/bundle` and later restores it under a different Ruby version, Bundler can reuse the tree even though the native extension inside it is wrong for the new runtime.
+
+## Inspect the installed platform and Ruby ABI
+
+Before rebuilding, verify what Ruby and platform the current environment expects.
+
+```sh
+ruby -v
+ruby -e 'puts RUBY_PLATFORM'
+bundle platform --ruby
+bundle platform --all
+```
+
+A result such as `ruby 3.3.6p108` means the ABI is for Ruby `3.3`. If the bundle was built under `3.2`, the extension directory under `vendor/bundle/ruby/3.2.0` is already a mismatch.
+
+On Bundler installations that use platform-specific gems, check the platform list in `Gemfile.lock` too:
+
+```sh
+grep -A3 '^PLATFORMS' Gemfile.lock
+```
+
+If the lockfile includes multiple platforms, Bundler may still install the wrong one if the current environment and cache are mismatched.
+
+## Remove the bad artifact
+
+The fix starts by removing the compiled gem and its cached build outputs. Clearing only the RubyGems cache is not enough if `vendor/bundle` or `.bundle` still contains the bad extension.
+
+Use the bundle path from the app directory if one is configured:
+
+```sh
+bundle config get path
+```
+
+Then remove the installed bundle directory and any local Bundler metadata:
+
+```sh
+rm -rf vendor/bundle .bundle
+bundle clean --force
+```
+
+If the offending gem was installed globally instead of in the app bundle, remove it from the current Ruby:
+
+```sh
+gem uninstall nokogiri
+gem uninstall pg
+gem uninstall grpc
+```
+
+If the extension was built by a gem with a separate source tree under `ext/`, removing the gem directory under `vendor/bundle` is usually enough, because the extension is not reusable across incompatible runtimes.
+
+If you want to clear Bundler’s cache as well, remove the cached `.gem` package and any compiled variants:
+
+```sh
+bundle cache clean --all
+rm -rf ~/.bundle/cache
+```
+
+The important part is to remove the old compiled binary, not just the Ruby wrapper files.
+
+## Reinstall with the correct toolchain
+
+After clearing the bad build, reinstall the gem against the active Ruby and platform.
+
+For a project bundle:
+
+```sh
+bundle install
+```
+
+If the lockfile was created on another platform and needs to be updated for the current one, force Bundler to resolve and install for the active environment:
+
+```sh
+bundle lock --add-platform "$(ruby -e 'print RUBY_PLATFORM')"
+bundle install
+```
+
+If the gem needs a fresh native rebuild and you already have the correct source in the lockfile, use:
+
+```sh
+bundle pristine nokogiri
+bundle pristine pg
+```
+
+`bundle pristine` restores gems to the state from the gem package and rebuilds native extensions when necessary. It is useful when the gem source is present but the compiled file is wrong or corrupted.
+
+For a direct gem install outside Bundler:
+
+```sh
+gem install nokogiri --platform=ruby
+gem install pg --platform=ruby
+```
+
+The `--platform=ruby` flag tells RubyGems to build from source instead of trying to use a precompiled platform-specific gem that may not match the local runtime. On systems with a proper native build chain, this produces an extension for the current Ruby and OS.
+
+## Make sure the toolchain and headers are present
+
+A rebuild only works if the required compiler and headers exist. The exact packages depend on the OS.
+
+On Debian or Ubuntu, install the standard build tools and common library headers:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential ruby-dev pkg-config
+```
+
+For common native gems, install their system dependencies as needed:
+
+```sh
+sudo apt-get install -y libpq-dev libxml2-dev libxslt1-dev
+```
+
+On Alpine Linux, use `musl`-compatible packages:
+
+```sh
+apk add --no-cache build-base ruby-dev pkgconf postgresql-dev libxml2-dev libxslt-dev
+```
+
+On macOS with Homebrew:
+
+```sh
+xcode-select --install
+brew install pkg-config postgresql libxml2 libxslt
+```
+
+If a gem’s build script cannot find headers or libraries, it may compile partially and still fail at load time later. That failure can look like a missing `.so`, because the build produced an unusable extension or none at all.
+
+## Rebuild for the right architecture
+
+Architecture mismatches are common on Apple Silicon and mixed CI environments. An `arm64` Ruby can’t load an `x86_64` extension, and the reverse is also true.
+
+Check the current architecture explicitly:
+
+```sh
+uname -m
+ruby -e 'puts RUBY_PLATFORM'
+file "$(bundle show nokogiri)/lib/nokogiri/nokogiri.so"
+```
+
+If the `file` output says `x86_64` while the current machine is `arm64`, the bundle was built for the wrong architecture.
+
+On macOS, ensure the Ruby interpreter and your shell are using the same architecture. If using Rosetta, both Ruby and the gem build must run under `x86_64`. If using native ARM Ruby, rebuild the bundle natively and avoid restoring an `x86_64` artifact into the same path.
+
+A clean rebuild typically looks like this:
+
+```sh
+rm -rf vendor/bundle .bundle
+bundle config set path vendor/bundle
+bundle install
+```
+
+That forces Bundler to rebuild every native extension for the current platform and architecture.
+
+## Use platform-specific gems carefully
+
+Some gems ship precompiled variants for known targets. Bundler may choose a precompiled gem if it matches the current platform. That is useful, but it can also hide platform drift until deployment time.
+
+`Gemfile.lock` can include entries such as:
+
+```text
+PLATFORMS
+  x86_64-linux
+  arm64-darwin-23
+```
+
+If the lockfile was created on one platform and reused on another, Bundler may still keep stale artifacts in `vendor/bundle` from the old target. The solution is not to edit the lockfile manually. The solution is to remove the built output and reinstall on the target platform.
+
+For CI and deployment images, prefer building the bundle inside the final image or on the exact same base image and architecture that will run the app. That keeps the ABI, libc, and system library versions aligned.
+
+## Container builds and deployment images
+
+In containerized deployments, native gems should be installed in the same image that runs the app, or in an image with the same OS and architecture layers.
+
+This pattern is safe:
+
+```dockerfile
+FROM ruby:3.3-bookworm
+
+WORKDIR /app
+
+COPY Gemfile Gemfile.lock ./
+RUN bundle install
+
+COPY . .
+CMD ["bundle", "exec", "puma", "-C", "config/puma.rb"]
+```
+
+This pattern is risky if a bundle from the host is copied into the image:
+
+```dockerfile
+COPY vendor/bundle /app/vendor/bundle
+```
+
+That copy can work only when the host and container targets are identical. Otherwise, the bundle may contain binaries built for the wrong libc, CPU architecture, or Ruby patchlevel. The safer approach is to install gems inside the container with the container’s Ruby.
+
+## Prevent the problem from returning
+
+Use a rebuild rather than a copied bundle when the Ruby version, OS, or architecture changes. If you must cache dependencies, scope the cache key to all relevant runtime inputs: Ruby version, OS image, and CPU architecture.
+
+A practical cache key often includes:
+
+- `ruby -v`
+- `ruby -e 'puts RUBY_PLATFORM'`
+- the base image digest or OS release
+- `Gemfile.lock`
+
+For Bundler, keep the bundle path inside the environment that will run it, and clear it when the runtime changes:
+
+```sh
+rm -rf vendor/bundle .bundle
+bundle install
+```
+
+If the issue is already present, the reliable fix is to remove the stale native extension and reinstall the gem on the target platform with the proper toolchain. That is the safest option because it rebuilds the binary against the exact Ruby ABI and system libraries that will load it.
