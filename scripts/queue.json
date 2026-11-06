@@ -2,20 +2,6 @@
     "generatedAt": "2026-11-01T23:11:30.619Z",
     "ideas": [
         {
-            "cell": "terraform-state-lock::terraform::remote-backend-concurrency",
-            "title": "Terraform Cannot Apply Because the State Is Locked by Another Operation",
-            "description": "Terraform blocks apply or plan when the remote state lock is held by a concurrent run or stale lock record.",
-            "tags": [
-                "terraform",
-                "state",
-                "locking",
-                "infrastructure",
-                "backend"
-            ],
-            "angle": "Start with the state-lock error and the lock ID. Explain how remote backends serialize writes to state, why parallel plans or interrupted applies leave a lock behind, and how Terraform uses locking to prevent corruption. Show how to identify a live lock versus a stale one and when to release it safely with the backend's lock mechanism.",
-            "slug": "terraform-cannot-apply-because-the-state-is-locked-by-another-operation"
-        },
-        {
             "cell": "vite-workspace-alias::vite::package-json-import-graph",
             "title": "Vite Resolves a Workspace Alias as Source Code Instead of the Published Package Entry",
             "description": "Vite imports the wrong workspace file when an alias points at source instead of the package entry point.",
@@ -32,19 +18,19 @@
     ],
     "drafted": [
         {
-            "cell": "ruby-gem-abi::native-addon::mismatched-platform",
-            "title": "Ruby Fails to Load a Native Gem Because the Platform ABI Does Not Match the Installed Extension",
-            "description": "A compiled Ruby gem cannot load when the native extension was built for a different platform or Ruby ABI.",
+            "cell": "terraform-state-lock::terraform::remote-backend-concurrency",
+            "title": "Terraform Cannot Apply Because the State Is Locked by Another Operation",
+            "description": "Terraform blocks apply or plan when the remote state lock is held by a concurrent run or stale lock record.",
             "tags": [
-                "ruby",
-                "gem",
-                "native-extension",
-                "abi",
-                "build"
+                "terraform",
+                "state",
+                "locking",
+                "infrastructure",
+                "backend"
             ],
-            "angle": "Open with the load error that names the missing shared library or incompatible extension. Explain how native gems compile against a specific Ruby version, OS, and architecture, why cached binaries or copied `vendor/bundle` trees break on another target, and how to rebuild the extension with the correct toolchain. Include the commands that clear the bad artifact and install the matching gem build.",
-            "slug": "ruby-fails-to-load-a-native-gem-because-the-platform-abi-does-not-match-the-installed-extension",
-            "draftedAt": "2026-11-05T01:55:42.206Z"
+            "angle": "Start with the state-lock error and the lock ID. Explain how remote backends serialize writes to state, why parallel plans or interrupted applies leave a lock behind, and how Terraform uses locking to prevent corruption. Show how to identify a live lock versus a stale one and when to release it safely with the backend's lock mechanism.",
+            "slug": "terraform-cannot-apply-because-the-state-is-locked-by-another-operation",
+            "draftedAt": "2026-11-06T01:56:58.917Z"
         }
     ]
 }
