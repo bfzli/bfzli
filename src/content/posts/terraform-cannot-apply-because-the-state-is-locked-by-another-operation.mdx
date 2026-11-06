@@ -1,0 +1,246 @@
+---
+title: "Terraform Cannot Apply Because the State Is Locked by Another Operation"
+description: "Terraform blocks apply or plan when the remote state lock is held by a concurrent run or stale lock record."
+tags: ["terraform", "state", "locking", "infrastructure", "backend"]
+date: Nov 6, 2026
+cell: "terraform-state-lock::terraform::remote-backend-concurrency"
+---
+
+Terraform blocks `apply` or `plan` against the remote backend, and the run stops with an error like:
+
+```text
+Error acquiring the state lock
+
+Lock Info:
+  ID:        1f4d3a8c-8f9e-4d0f-b2f6-7f6f6e9d3f8a
+  Path:      prod/terraform.tfstate
+  Operation: OperationTypeApply
+  Who:       ci-runner@build-17
+  Version:   1.6.6
+  Created:   2026-11-06 12:14:03.123456789 +0000 UTC
+  Info:      concurrent operation
+```
+
+## What Terraform is locking
+
+Terraform uses state to track the current known state of managed infrastructure. When the state lives in a remote backend, multiple people and automation can reach the same file or object. That creates a write coordination problem.
+
+Locking exists to serialize state writes. A successful `apply` does not just change infrastructure. It also updates state to match the new resource graph, provider IDs, and dependency metadata. If two operations write at the same time, one run can overwrite the other's state changes, or one run can plan against a state snapshot that no longer matches reality.
+
+That is why Terraform tries to acquire a lock before operations that can write state. The lock is held by one operation at a time. While it is held, another operation against the same workspace or state file gets blocked.
+
+The lock record usually includes a lock `ID`, the path to the state object, the operation type, the user or process that took the lock, and a timestamp. The exact format depends on the backend, but the behavior is the same.
+
+## Why the error appears on `plan` as well as `apply`
+
+The obvious case is `terraform apply`, which writes both infrastructure and state.
+
+`terraform plan` can also try to lock state because it reads the current state and, depending on backend behavior and command flags, may need to protect against concurrent changes while producing the plan. In Terraform 1.x, remote backends commonly lock for `plan` unless you disable it with `-lock=false`. Disabling locking avoids the error, but it also removes protection against reading a moving target.
+
+That is the key mechanism: the lock is not just a file handle. It is Terraform's concurrency control for a shared source of truth.
+
+## How remote backends implement the lock
+
+Terraform does not use one universal lock implementation. The backend handles it.
+
+Common examples:
+
+- **S3 backend with DynamoDB locking**: Terraform writes a lock item into a DynamoDB table using a conditional put. If the item already exists, acquisition fails. This is the classic S3 plus DynamoDB pattern.
+- **AzureRM backend**: Terraform uses Azure Blob Storage leases. The lease acts as an exclusive lock on the blob.
+- **GCS backend**: Terraform uses object preconditions and metadata-based coordination.
+- **Terraform Cloud / HCP Terraform**: the platform manages the workspace lock server-side.
+- **Consul backend**: Terraform uses Consul sessions and KV entries.
+
+The important detail is that the lock is backend-native. Releasing it safely requires the backend's own mechanism, not manual deletion of random state files.
+
+## Why locks get left behind
+
+A live run keeps the lock until it completes. A stale lock record appears when the run stops before the backend can clean up.
+
+Typical causes include:
+
+- `terraform apply` interrupted by `Ctrl+C`
+- a CI job terminated by the runner, autoscaler, or timeout
+- a crashed shell, agent, or network session
+- a provider error that aborts before unlock
+- a long-running operation that is retried by automation while the original run is still active
+- two parallel pipelines targeting the same workspace or state file
+
+The stale lock is not corruption by itself. It is a defensive record that says, "a writer may still be active, so do not let another writer proceed."
+
+## How to tell a live lock from a stale one
+
+The first check is whether a Terraform operation is actually running against the same backend and workspace.
+
+Look for:
+
+- active CI jobs
+- open terminal sessions
+- recent `terraform apply` or `terraform plan` processes
+- deployment automation targeting the same state path
+- workspace selection mistakes, especially in shared backends
+
+If a run is active, do not force-unlock it. Two simultaneous writers are exactly what locking prevents.
+
+If no run is active, inspect the lock metadata. The error output often includes enough information to identify the owner:
+
+- `Who`
+- `Version`
+- `Created`
+- `Path`
+- `Operation`
+- the lock `ID`
+
+That data tells you whether the lock is recent or old, and which process claimed it. A lock created seconds ago while a job is still executing is likely live. A lock created hours ago with no corresponding active job is likely stale.
+
+For S3 plus DynamoDB, you can inspect the lock table directly:
+
+```bash
+aws dynamodb get-item \
+  --table-name terraform-locks \
+  --key '{"LockID":{"S":"prod/terraform.tfstate-md5"}}'
+```
+
+For Azure Blob Storage, you can inspect the lease state:
+
+```bash
+az storage blob show \
+  --account-name mytfstateacct \
+  --container-name tfstate \
+  --name prod/terraform.tfstate \
+  --auth-mode login
+```
+
+For Terraform Cloud, check the workspace's run queue and current run status in the UI or through the API.
+
+## The safe way to release a stale lock
+
+Terraform provides a built-in force unlock command:
+
+```bash
+terraform force-unlock 1f4d3a8c-8f9e-4d0f-b2f6-7f6f6e9d3f8a
+```
+
+Use the exact lock `ID` from the error output. Terraform validates that ID against the backend lock record.
+
+You can also pass `-force` to avoid the confirmation prompt in automation:
+
+```bash
+terraform force-unlock -force 1f4d3a8c-8f9e-4d0f-b2f6-7f6f6e9d3f8a
+```
+
+This should only be used when you are certain no active Terraform run still owns the lock. The release mechanism must match the backend. For example, with Azure Blob leases, Terraform breaks the lease through the backend client. With DynamoDB locking, Terraform deletes the lock item only if it matches the expected lock ID. Do not manually edit the lock table unless the backend documentation explicitly says that is supported.
+
+A safe unlock sequence looks like this:
+
+```bash
+terraform init
+terraform plan
+terraform force-unlock -force 1f4d3a8c-8f9e-4d0f-b2f6-7f6f6e9d3f8a
+terraform plan
+```
+
+The first `plan` reproduces the failure and confirms the backend and workspace. The unlock then clears the stale record. The second `plan` verifies that the backend accepts new lock acquisition.
+
+## When not to force-unlock
+
+Do not force-unlock when any of the following is true:
+
+- a pipeline is still running
+- a human operator is applying changes in another terminal
+- the same workspace has concurrent scheduled runs
+- the backend is eventually consistent and the lock owner may still be mid-operation
+- the lock is recent and the operation is still plausible
+
+A force-unlock against a live run can let another writer enter while the first one is still modifying infrastructure or state. That can lead to mismatched state, duplicate resources, or failed deletes and replacements.
+
+## How to use `-lock=false`
+
+Terraform supports bypassing lock acquisition with `-lock=false` on commands like `plan` and `apply`.
+
+Example:
+
+```bash
+terraform plan -lock=false
+```
+
+That flag suppresses locking, but it does not remove the concurrency problem. It only skips the guardrail. In almost all shared-backend workflows, `-lock=false` should be reserved for diagnostics or read-only situations where you already know no one else is writing.
+
+For `apply`, bypassing the lock is especially risky. State updates can interleave, and the final state file may no longer describe the actual infrastructure.
+
+## How backend-specific locking behaves
+
+### S3 backend with DynamoDB
+
+The S3 object stores the state. DynamoDB stores the lock record. If the lock row exists, Terraform cannot acquire a new lock.
+
+A stale row can happen if a process dies before cleanup. Releasing it means deleting the matching row or using `terraform force-unlock`, which performs the correct backend operation. The lock table is often named something like `terraform-locks`, but the exact name comes from backend configuration.
+
+Example backend snippet:
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket         = "my-tfstate-bucket"
+    key            = "prod/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "terraform-locks"
+    encrypt        = true
+  }
+}
+```
+
+### AzureRM backend
+
+Azure Blob leases are exclusive. If a lease is active, another client cannot modify the blob until the lease is released or broken. Terraform manages this automatically through the backend.
+
+If the lease is stale, `terraform force-unlock` is the preferred release path. Avoid deleting the blob or reuploading state as a lock workaround.
+
+### Terraform Cloud / HCP Terraform
+
+Workspace runs are serialized by the platform. A run queue item or a currently applying run can block another plan or apply. The right action is usually to cancel the active run or wait for it to finish. `terraform force-unlock` is not the usual fix here because the platform owns the coordination.
+
+## How to prevent repeated lock failures
+
+The main cause is concurrent access to the same state.
+
+Use one of these patterns:
+
+- serialize CI jobs per workspace
+- prevent parallel `apply` runs on the same backend key
+- separate environments into different state files, workspaces, or backend keys
+- set sensible job timeouts so abandoned runs do not linger indefinitely
+- send termination signals that allow Terraform to clean up, rather than killing the process abruptly
+- make retry logic aware of lock errors so it backs off instead of spawning more writers
+
+A CI pipeline that retries `apply` immediately after a lock error can make the problem worse. The first run may still be active, and the retry just becomes a second contender. A better pattern is to wait, inspect the active run, and retry only after the lock is clearly stale or released.
+
+Example shell guard for serialized execution in automation:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+terraform init
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+Do not run this against the same workspace from multiple jobs at once unless the runner itself guarantees exclusivity.
+
+## What to check before releasing the lock
+
+Before `terraform force-unlock`, verify all of the following:
+
+- no active Terraform process is running
+- no CI job is still applying the same workspace
+- the lock `ID` matches the current error output
+- the backend and workspace are the expected ones
+- the lock is older than the current run window
+- the backend-specific lock record exists and matches the failure
+
+If any of those checks fail, wait or stop the other run instead.
+
+## Practical takeaway
+
+Prefer waiting for or stopping the live writer, then use `terraform force-unlock` only for a confirmed stale lock. The lock exists to protect shared state from concurrent writes, so the safest fix is the one that restores a single writer before state changes continue. To keep the problem from coming back, serialize Terraform runs per backend key and avoid parallel `apply` or `plan` jobs against the same remote state.
