@@ -1,0 +1,338 @@
+---
+title: "Vite Resolves a Workspace Alias as Source Code Instead of the Published Package Entry"
+description: "Vite imports the wrong workspace file when an alias points at source instead of the package entry point."
+tags: ["vite", "workspace", "alias", "package-json", "build"]
+date: Nov 7, 2026
+cell: "vite-workspace-alias::vite::package-json-import-graph"
+---
+
+`import { Button } from '@acme/ui'` resolves to `/packages/ui/src/index.ts` instead of the published package entry, and Vite reports `Failed to resolve import "@acme/ui" from "src/main.ts". Does the file exist?`
+
+## What is breaking
+
+The import specifier points at a workspace package name, but Vite resolves it to a source file path that is not the package’s public entry surface. That causes one of two failure modes:
+
+1. The alias target is outside the graph that the browser build can consume, so Vite throws a resolution error.
+2. The alias target is inside the workspace and looks valid in development, but production bundling follows a different path than the package entry defined by `package.json`.
+
+The visible symptom depends on the exact setup. Common messages include:
+
+- `Failed to resolve import "@acme/ui" from "src/main.ts". Does the file exist?`
+- `Could not resolve "/packages/ui/src/index.ts" from "src/main.ts"`
+- `Uncaught Error: [vite] Internal server error: Failed to resolve import ...`
+
+The important detail is not the string itself. The import graph is bypassing the package boundary and reaching into source code directly.
+
+## Why Vite resolves the wrong file
+
+Vite has its own resolver on top of Node-style package resolution. The ordering matters.
+
+When `resolve.alias` matches a specifier, Vite applies the alias first. Only after that does it continue with file resolution, package `exports`, `mainFields`, extension resolution, and symlink handling.
+
+That means an alias like this:
+
+```ts
+import { defineConfig } from 'vite'
+import path from 'node:path'
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      '@acme/ui': path.resolve(__dirname, '../../packages/ui/src')
+    }
+  }
+})
+```
+
+does not mean “use the package `@acme/ui`”. It means “replace the specifier with a filesystem path under `src`”. From that point on, Vite is no longer resolving a package entry. It is resolving a source tree.
+
+That distinction matters because package entry resolution and source-tree resolution are not equivalent.
+
+A package entry is controlled by `package.json`:
+
+```json
+{
+  "name": "@acme/ui",
+  "version": "1.2.3",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  }
+}
+```
+
+A source shortcut ignores that surface completely. It can reach files that are not exported, not bundled, and not part of the compatibility contract.
+
+## Alias precedence in practice
+
+`resolve.alias` has higher precedence than package exports because the alias replaces the specifier before package resolution starts.
+
+Consider these two imports:
+
+```ts
+import { Button } from '@acme/ui'
+import { Button } from '../../packages/ui/src/Button'
+```
+
+The first one should be resolved by package metadata. The second one directly references source.
+
+If `resolve.alias` rewrites `@acme/ui` to `../../packages/ui/src`, the first import effectively becomes the second. That creates several consequences:
+
+- internal files become part of the consumer’s dependency graph
+- changes to source file layout can break consumers without any change to the public package API
+- conditional exports in `package.json` are skipped
+- the browser build can see uncompiled TypeScript, TS path aliases, or source-only imports that the published package would never expose
+
+This is why the import can appear to work in one mode and fail in another.
+
+## Why development can look correct while production differs
+
+Vite development mode serves modules through on-demand transforms. It tolerates a lot of source structure because it is not building a final bundle. A workspace source file can be transpiled on the fly, and linked packages often work through symlinks or direct file access.
+
+Production build is different. `vite build` uses Rollup to statically analyze and bundle the graph. That exposes issues that dev mode can hide:
+
+- source files imported through aliases may contain non-bundled dependencies
+- package `exports` may not match the internal file path being used
+- linked workspace packages may resolve differently when `preserveSymlinks` or `resolve.dedupe` settings differ
+- deep imports into `src` can bypass the package entry that production consumers are supposed to use
+
+A development server can happily transform `/packages/ui/src/index.ts`. A production bundle may fail if that file imports other source-only modules, references Node-only APIs, or relies on path aliases that are not mirrored in the consuming app.
+
+A common pattern is a monorepo where package `A` depends on package `B`, and `A` aliases `@acme/b` to `../../packages/b/src`. In dev, Vite transpiles the source tree and everything seems fine. In build, Rollup may pull in a different module path than intended, and the final bundle no longer matches the package’s published shape.
+
+## The role of package `exports`
+
+Package `exports` defines the public surface of a package. If `@acme/ui` declares:
+
+```json
+{
+  "exports": {
+    ".": "./dist/index.js",
+    "./button": "./dist/button.js"
+  }
+}
+```
+
+then consumers should import only those supported entry points:
+
+```ts
+import { Button } from '@acme/ui'
+import { Button } from '@acme/ui/button'
+```
+
+This lets the package author control what is public. It also lets the bundler resolve the correct artifact for the environment.
+
+When an alias points at `src`, that contract is bypassed. Imports can reach implementation details such as:
+
+```ts
+import { useTheme } from '@acme/ui/src/internal/theme'
+```
+
+That may compile locally, but it is not a stable consumer contract. The published package may not include that file at all.
+
+If a package wants consumers to use source during local development, the safer approach is to expose a workspace-level development alias only inside the app that owns the monorepo, and keep the public package import unchanged. The app can resolve the package name to a package root, not to arbitrary `src` internals.
+
+## The difference between a package entry and a source shortcut
+
+The package entry is the single module path that the package author supports. It is usually the file named by `exports`, `module`, or `main`.
+
+The source shortcut is a direct file system path to implementation code.
+
+These are not interchangeable.
+
+A package entry can:
+
+- re-export selected APIs
+- preserve stable file layouts
+- swap between ESM and CJS through conditional exports
+- keep private modules private
+
+A source shortcut can:
+
+- accidentally expose private imports
+- ignore build output
+- couple consumers to the current repository layout
+- create dev/build mismatches
+
+If the goal is to consume `@acme/ui` as a package, the import should stay at `@acme/ui`. The resolver should then map that name to the package’s declared entry, not to `src/index.ts`.
+
+## How to inspect the resolution path
+
+You can confirm the path Vite is choosing with `vite --debug` and a small resolver probe.
+
+Run the build with debug logging:
+
+```bash
+vite build --debug
+```
+
+If the output shows the alias rewriting `@acme/ui` into a workspace path, the import is no longer using package exports.
+
+You can also check what Node sees from the workspace root:
+
+```bash
+node -p "require.resolve('@acme/ui')"
+```
+
+If the package has a proper `exports` map, this should point at the published entry under `dist` or at the package’s declared module entry, not at `src`.
+
+For ESM packages, use:
+
+```bash
+node --input-type=module -e "import('@acme/ui').then(m => console.log(Object.keys(m)))"
+```
+
+This checks whether the package can be imported through its public surface. If this works and Vite still fails, the alias is the likely cause.
+
+## The right way to point at the public entry surface
+
+Prefer one of these patterns.
+
+### Import the package name directly
+
+This is the most robust option.
+
+```ts
+import { Button } from '@acme/ui'
+```
+
+The package itself should define what that means via `exports`.
+
+### Point the alias at the package root, not `src`
+
+If a local workspace alias is necessary, map to the package root directory and let package resolution handle the entry:
+
+```ts
+import { defineConfig } from 'vite'
+import path from 'node:path'
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      '@acme/ui': path.resolve(__dirname, '../../packages/ui')
+    }
+  }
+})
+```
+
+This preserves the package boundary. It lets Vite read `package.json` and choose the declared entry instead of hard-coding a source file.
+
+### Export a dedicated development entry
+
+If source and build artifacts must be differentiated, use explicit entry points and conditional exports.
+
+```json
+{
+  "name": "@acme/ui",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./dev": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  }
+}
+```
+
+Then development code can opt into the dev surface explicitly:
+
+```ts
+import { Button } from '@acme/ui/dev'
+```
+
+That keeps the stable package entry stable.
+
+## Avoid leaking internal source paths
+
+A package should not require consumers to know that `Button` lives under `src/components/Button.tsx`. That is an implementation detail.
+
+If the package needs internal composition, re-export through the public entry file:
+
+```ts
+// packages/ui/src/index.ts
+export { Button } from './components/Button'
+export { Input } from './components/Input'
+```
+
+Then build output should mirror that API:
+
+```ts
+// packages/ui/dist/index.js
+export { Button } from './components/Button.js'
+export { Input } from './components/Input.js'
+```
+
+Consumers import only from `@acme/ui`. No alias to `src` is necessary.
+
+This matters even more when the package uses generated files, CSS extraction, or platform-specific branches. Direct source imports can bypass those steps and produce a bundle that is structurally different from the package users will actually install.
+
+## When workspace linking is part of the problem
+
+Workspace package managers such as npm, pnpm, and Yarn can link packages into `node_modules` as symlinks. Vite has to decide whether to treat the linked package as source or as an external dependency.
+
+If an alias overrides the package name, the symlink behavior becomes irrelevant. Vite never reaches the package boundary. It resolves the workspace path immediately.
+
+That can interact badly with monorepo layouts where the package root is intended to be the unit of consumption. A direct path to `packages/ui/src` can cause Vite to crawl files that are outside the package’s emitted artifacts, outside its `exports` map, and outside its tested surface.
+
+In workspace setups, prefer package-root imports and package-root aliases. Keep the package entry stable.
+
+## A practical configuration pattern
+
+A Vite app that consumes workspace packages should usually avoid aliasing package names to source folders. If aliases are needed for local imports inside the app itself, use a separate prefix.
+
+```ts
+import { defineConfig } from 'vite'
+import path from 'node:path'
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      '@app': path.resolve(__dirname, 'src'),
+      '@shared': path.resolve(__dirname, '../shared/src')
+    }
+  }
+})
+```
+
+Do not reuse the package’s published name as a shortcut to its internals.
+
+For the package itself:
+
+```json
+{
+  "name": "@acme/ui",
+  "version": "1.2.3",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  }
+}
+```
+
+Build the package before consuming it:
+
+```bash
+pnpm --filter @acme/ui build
+pnpm --filter web-app build
+```
+
+This ensures the consuming app sees the same surface that downstream users will see.
+
+## Keeping the problem from coming back
+
+The fix to prefer is to import the package name and let `package.json` `exports` define the entry point. That keeps Vite on the package boundary and prevents source internals from leaking into consumers.
+
+Use a source alias only for internal app code, not for published package names. If a workspace package must be resolved locally, alias the package root rather than `src`, so Vite still reads the package metadata and resolves the public entry surface.
+
+For published packages, keep the public API behind `exports`, build to `dist`, and test imports through `node`, Vite dev, and `vite build`. That combination catches resolution drift before consumers end up depending on a source path that was never meant to be public.
