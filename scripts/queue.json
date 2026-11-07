@@ -1,6 +1,7 @@
 {
     "generatedAt": "2026-11-01T23:11:30.619Z",
-    "ideas": [
+    "ideas": [],
+    "drafted": [
         {
             "cell": "vite-workspace-alias::vite::package-json-import-graph",
             "title": "Vite Resolves a Workspace Alias as Source Code Instead of the Published Package Entry",
@@ -13,24 +14,8 @@
                 "build"
             ],
             "angle": "Open with the import that resolves to an unexpected workspace path. Explain Vite's alias precedence, how `resolve.alias`, package exports, and source shortcuts interact, and why development can appear correct while production bundles differ. Show how to point imports at the public entry surface and avoid leaking internal source paths into consumers.",
-            "slug": "vite-resolves-a-workspace-alias-as-source-code-instead-of-the-published-package-entry"
-        }
-    ],
-    "drafted": [
-        {
-            "cell": "terraform-state-lock::terraform::remote-backend-concurrency",
-            "title": "Terraform Cannot Apply Because the State Is Locked by Another Operation",
-            "description": "Terraform blocks apply or plan when the remote state lock is held by a concurrent run or stale lock record.",
-            "tags": [
-                "terraform",
-                "state",
-                "locking",
-                "infrastructure",
-                "backend"
-            ],
-            "angle": "Start with the state-lock error and the lock ID. Explain how remote backends serialize writes to state, why parallel plans or interrupted applies leave a lock behind, and how Terraform uses locking to prevent corruption. Show how to identify a live lock versus a stale one and when to release it safely with the backend's lock mechanism.",
-            "slug": "terraform-cannot-apply-because-the-state-is-locked-by-another-operation",
-            "draftedAt": "2026-11-06T01:56:58.917Z"
+            "slug": "vite-resolves-a-workspace-alias-as-source-code-instead-of-the-published-package-entry",
+            "draftedAt": "2026-11-07T01:29:15.037Z"
         }
     ]
 }
