@@ -1,6 +1,111 @@
 {
-    "generatedAt": "2026-11-01T23:11:30.619Z",
-    "ideas": [],
+    "generatedAt": "2026-11-08T23:15:24.453Z",
+    "ideas": [
+        {
+            "cell": "remix-action-redirect-missing-route::remix::relative-form-post",
+            "title": "Remix Returns 404 After a Form Posts to a Route That Has No Action",
+            "description": "A form submits successfully, but Remix responds with 404 because the matched route does not export an action.",
+            "tags": [
+                "remix",
+                "forms",
+                "routing",
+                "actions"
+            ],
+            "angle": "Open with the exact 404 symptom and the route URL that receives the POST. Explain how Remix selects the action from the matched route module, why a page route with only a loader cannot handle form submissions, and how relative action URLs can target the wrong module. Show the fix by exporting an action in the correct route file or pointing the form at the intended route explicitly.",
+            "slug": "remix-returns-404-after-a-form-posts-to-a-route-that-has-no-action"
+        },
+        {
+            "cell": "electron-node-abi-native-module::electron::packaged-runtime",
+            "title": "Electron Crashes on Startup When a Native Node Module Is Built for the Wrong ABI",
+            "description": "Electron starts, then a native addon fails to load because the binary was compiled for Node instead of Electron's ABI.",
+            "tags": [
+                "electron",
+                "native-modules",
+                "node-abi",
+                "packaging"
+            ],
+            "angle": "Start with the native module load error and the exact module name. Explain the ABI mismatch between Node.js and Electron, how that breaks addons built against the wrong runtime, and why rebuilding is required after install or package changes. Cover the fix with electron-rebuild, npm rebuild with electron headers, or shipping a prebuilt binary for the Electron version in use.",
+            "slug": "electron-crashes-on-startup-when-a-native-node-module-is-built-for-the-wrong-abi"
+        },
+        {
+            "cell": "vite-base-path-relative-imports::vite::nested-deploy-root",
+            "title": "Vite Serves 404s for CSS and JS When the App Is Deployed Under a Nested Path",
+            "description": "Built assets load from `/` instead of the deployment subpath, so the browser requests files that do not exist.",
+            "tags": [
+                "vite",
+                "deploy",
+                "assets",
+                "base-path"
+            ],
+            "angle": "Open with the missing asset URLs and the 404s they produce in the browser. Explain how Vite bakes the `base` setting into emitted URLs during build and why a nested deployment path breaks absolute references. Show how to set `base` in `vite.config.ts`, adjust router basename if needed, and verify the generated HTML points at the deployed prefix.",
+            "slug": "vite-serves-404s-for-css-and-js-when-the-app-is-deployed-under-a-nested-path"
+        },
+        {
+            "cell": "astro-endpoint-method-handler::astro::missing-http-method",
+            "title": "Astro Returns 405 When an Endpoint Does Not Export the Right HTTP Method",
+            "description": "A request reaches an Astro endpoint, but the response is 405 because the file does not export the matching method handler.",
+            "tags": [
+                "astro",
+                "api",
+                "http",
+                "endpoints"
+            ],
+            "angle": "Begin with the 405 response and the request method that fails. Explain how Astro endpoint files map exported functions like `GET` and `POST` to HTTP verbs, and why a default export or the wrong filename pattern leaves no handler for the request. Show how to export the exact method function, confirm the route path, and return the proper status code and body.",
+            "slug": "astro-returns-405-when-an-endpoint-does-not-export-the-right-http-method"
+        },
+        {
+            "cell": "hono-request-body-parse-order::hono::json-middleware-order",
+            "title": "Hono Rejects a JSON Request When Middleware Reads the Body Before the Route Handler",
+            "description": "The handler cannot parse JSON because an earlier middleware consumed the request body first.",
+            "tags": [
+                "hono",
+                "middleware",
+                "json",
+                "request-body"
+            ],
+            "angle": "Open with the parse failure and the request path that triggers it. Explain that the Fetch request body is a one-shot stream, so any middleware that calls `req.text()`, `req.json()`, or similar exhausts it before the handler runs. Show how to parse once, pass the parsed data through `c.set()`, or reorder middleware so the route handler owns the body read.",
+            "slug": "hono-rejects-a-json-request-when-middleware-reads-the-body-before-the-route-handler"
+        },
+        {
+            "cell": "nextjs-client-component-server-import::nextjs::app-router-boundary",
+            "title": "Next.js Throws a Build Error When a Client Component Imports a Server-Only Module",
+            "description": "The App Router build fails because a `'use client'` file pulls server-only code into the client bundle.",
+            "tags": [
+                "nextjs",
+                "react-server-components",
+                "build",
+                "client-component"
+            ],
+            "angle": "Start with the exact build error and the import chain that leads into the client component. Explain how the App Router splits server and client graphs, why server-only modules can include Node APIs or private data that cannot be bundled for the browser, and how a client boundary changes what can be imported. Show the fix by moving the import behind a server component, using a prop boundary, or replacing the module with a browser-safe alternative.",
+            "slug": "next-js-throws-a-build-error-when-a-client-component-imports-a-server-only-module"
+        },
+        {
+            "cell": "dockerfile-copy-absence::docker::missing-source-path",
+            "title": "Docker Build Fails with COPY: No Such File or Directory When the Context Does Not Include the File",
+            "description": "`docker build` stops at `COPY` because the source path is outside the build context or excluded by `.dockerignore`.",
+            "tags": [
+                "docker",
+                "build",
+                "dockerfile",
+                "context"
+            ],
+            "angle": "Open with the exact `COPY` error and the source path named by Docker. Explain the build context boundary, how Docker can only copy files sent in the context archive, and why `.dockerignore` can remove a file even when it exists locally. Show how to run the build from the correct directory, fix the `COPY` path, or change the context and ignore rules.",
+            "slug": "docker-build-fails-with-copy-no-such-file-or-directory-when-the-context-does-not-include-the-file"
+        },
+        {
+            "cell": "nginx-proxy-pass-trailing-slash::nginx::upstream-path-rewrite",
+            "title": "Nginx Proxies the Wrong Upstream URL When `proxy_pass` Uses the Wrong Trailing Slash",
+            "description": "Requests reach the upstream app with an unexpected path because `proxy_pass` rewrites the URI differently than intended.",
+            "tags": [
+                "nginx",
+                "reverse-proxy",
+                "proxy-pass",
+                "routing"
+            ],
+            "angle": "Begin with the incorrect upstream path or 404 returned by the backend. Explain the URI rewrite rules around `proxy_pass`, especially the difference between including and omitting a trailing slash in the upstream URL, and how that changes path joining. Show the correct location block for preserving or rewriting the request path and how to confirm the final upstream URI.",
+            "slug": "nginx-proxies-the-wrong-upstream-url-when-proxy-pass-uses-the-wrong-trailing-slash"
+        }
+    ],
     "drafted": [
         {
             "cell": "vite-workspace-alias::vite::package-json-import-graph",
