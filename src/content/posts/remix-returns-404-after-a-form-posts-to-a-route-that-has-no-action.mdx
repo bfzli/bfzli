@@ -1,0 +1,288 @@
+---
+title: "Remix Returns 404 After a Form Posts to a Route That Has No Action"
+description: "A form submits successfully, but Remix responds with 404 because the matched route does not export an action."
+tags: ["remix", "forms", "routing", "actions"]
+date: Nov 9, 2026
+cell: "remix-action-redirect-missing-route::remix::relative-form-post"
+---
+
+`POST /contacts/new` returns `404 Not Found` in Remix with the route module error `No action found for route "routes/contacts.new"`.
+
+## What the 404 means
+
+In Remix, a form submission is not handled by the URL alone. The request is routed to the matched route module, and Remix looks for an exported `action` function in that module.
+
+If the route that receives the `POST` does not export `action`, Remix does not fall back to another route or infer intent from the form. The request is rejected with a `404` because there is no mutation handler for that route module.
+
+This behavior often appears on a page route that has a `loader` for rendering data, but no `action` for handling writes. A route can render successfully on `GET` and still fail on `POST` if the same module does not define an `action`.
+
+## How Remix chooses the handler for a form submission
+
+When a form submits, Remix uses the form’s `action` URL to determine the target route. The browser sends `POST` to that URL. Remix then matches the URL against the route tree and picks the most specific matched route module.
+
+For a matched route, Remix checks whether that module exports:
+
+- `action` for non-`GET` requests
+- `loader` for `GET` requests
+- `default` for rendering the component
+
+If the request is `POST` and the matched route module has no `action`, Remix responds with a 404-style route error because there is no mutation endpoint for that match.
+
+This is different from a traditional server framework where the same controller might handle both page rendering and form processing automatically. In Remix, loaders and actions are explicit and route-scoped.
+
+## A route with only a loader cannot accept form posts
+
+Consider a route module like `app/routes/contacts.new.tsx`:
+
+```tsx
+import type { LoaderFunctionArgs } from "@remix-run/node";
+import { json } from "@remix-run/node";
+import { Form, useLoaderData } from "@remix-run/react";
+
+export async function loader({}: LoaderFunctionArgs) {
+  return json({ title: "New contact" });
+}
+
+export default function NewContactRoute() {
+  const data = useLoaderData<typeof loader>();
+
+  return (
+    <div>
+      <h1>{data.title}</h1>
+      <Form method="post">
+        <input name="name" />
+        <button type="submit">Save</button>
+      </Form>
+    </div>
+  );
+}
+```
+
+This renders the page correctly. The problem appears when the form submits. Because the route module does not export `action`, the `POST` has nowhere to go.
+
+The resulting failure is not caused by the `<Form>` component itself. `Form` simply creates a normal form submission that Remix intercepts. The error comes from the route module contract: a `POST` requires `action`.
+
+## Why the matched route matters
+
+The route that handles the submit is the one that matches the form’s target URL, not necessarily the route that visually contains the form in the component tree.
+
+That distinction matters when the form is nested in layouts or when the `action` URL is relative.
+
+A form like this:
+
+```tsx
+<Form method="post">
+  <button type="submit">Save</button>
+</Form>
+```
+
+submits to the current URL by default. If the current page is `/contacts/new`, the browser posts to `/contacts/new`. Remix then matches `routes/contacts.new.tsx`.
+
+If that route only exports a loader, the submission fails even if a parent route or sibling route has an action. Remix does not search upward for “some action somewhere.” It uses the route that matches the request URL.
+
+## How relative `action` URLs can hit the wrong route
+
+Relative `action` values can be correct syntactically and still target the wrong module.
+
+For example:
+
+```tsx
+<Form method="post" action="new">
+  <button type="submit">Save</button>
+</Form>
+```
+
+If this form is rendered on `/contacts`, the browser resolves the target URL to `/contacts/new`. That may or may not be the intended route.
+
+If the intended mutation handler lives on `/contacts`, but the form points to `new`, the request will be routed to `routes/contacts.new.tsx`. If that file is a page route with only a loader, the `POST` fails with a 404.
+
+Similarly, if the current page is `/contacts/new` and the form uses a relative action like `action="."`, the submission targets the current route. That is fine only if the current route exports an action.
+
+In Remix, relative URL resolution follows standard browser URL rules. That means `action="edit"` or `action="../"` can silently change which route module receives the submission.
+
+## The route file must export `action`
+
+If the page route itself is supposed to handle the submit, add an `action` to the same route file.
+
+```tsx
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import { json, redirect } from "@remix-run/node";
+import { Form, useLoaderData } from "@remix-run/react";
+
+export async function loader({}: LoaderFunctionArgs) {
+  return json({ title: "New contact" });
+}
+
+export async function action({ request }: ActionFunctionArgs) {
+  const formData = await request.formData();
+  const name = String(formData.get("name") ?? "");
+
+  if (!name) {
+    return json({ error: "Name is required" }, { status: 400 });
+  }
+
+  // Persist data here.
+  return redirect("/contacts");
+}
+
+export default function NewContactRoute() {
+  const data = useLoaderData<typeof loader>();
+
+  return (
+    <div>
+      <h1>{data.title}</h1>
+      <Form method="post">
+        <label>
+          Name
+          <input name="name" />
+        </label>
+        <button type="submit">Save</button>
+      </Form>
+    </div>
+  );
+}
+```
+
+This works because the `POST /contacts/new` request now lands on a module that exports `action`.
+
+The loader still serves the page on `GET`, and the action handles the form submission on `POST`. They can live in the same route file when the page and mutation belong to the same URL.
+
+## Point the form at the route that owns the mutation
+
+If the page route is only for display and a different route should process the data, point the form at that route explicitly.
+
+For example, if `/contacts/new` is just the page and `/contacts` should handle creation, set `action="/contacts"`:
+
+```tsx
+import { Form } from "@remix-run/react";
+
+export default function NewContactRoute() {
+  return (
+    <Form method="post" action="/contacts">
+      <label>
+        Name
+        <input name="name" />
+      </label>
+      <button type="submit">Save</button>
+    </Form>
+  );
+}
+```
+
+Then put the action on `app/routes/contacts.tsx`:
+
+```tsx
+import type { ActionFunctionArgs } from "@remix-run/node";
+import { redirect } from "@remix-run/node";
+
+export async function action({ request }: ActionFunctionArgs) {
+  const formData = await request.formData();
+  const name = String(formData.get("name") ?? "");
+
+  if (!name) {
+    return new Response("Name is required", { status: 400 });
+  }
+
+  // Create the contact.
+  return redirect("/contacts");
+}
+```
+
+This arrangement keeps the form target and the mutation endpoint aligned. The `/contacts/new` route renders the UI. The `/contacts` route owns the write operation.
+
+## Relative vs absolute action paths
+
+Use absolute paths when the target route must be unambiguous.
+
+- `action="/contacts"` always posts to `/contacts`
+- `action="contacts"` resolves relative to the current URL
+- omitting `action` posts to the current URL
+
+If the form can be rendered from multiple locations, relative actions can change meaning based on the current path. That is the main source of accidental routing to the wrong module.
+
+A common pattern is to render a form inside a nested route and expect the parent route’s action to run. That only happens if the form actually posts to the parent route URL. Otherwise, the child route handles the request.
+
+## Nested routes and empty actions
+
+Nested routing can make the mismatch harder to see.
+
+Suppose this route structure exists:
+
+- `app/routes/contacts.tsx`
+- `app/routes/contacts.new.tsx`
+
+If the form is rendered in `contacts.new.tsx` without an explicit action, the submit goes to `/contacts/new`. The matched route module is `contacts.new.tsx`.
+
+If the intent is to submit to `/contacts`, then the form must say so:
+
+```tsx
+<Form method="post" action="/contacts">
+  <button type="submit">Save</button>
+</Form>
+```
+
+Otherwise, the child route receives the `POST`, and the parent action is never considered.
+
+The same applies when using nested layouts. A layout route can wrap child content, but the browser still posts to the URL in the form. The active URL decides the route match.
+
+## Debugging the mismatch
+
+When this error appears, check these items in order:
+
+1. The form `method` is `post`, `put`, `patch`, or `delete`.
+2. The form `action` URL is the one you expect.
+3. The route module matched by that URL exports `action`.
+4. The action is exported from the exact route file, not from a parent component file.
+5. A relative `action` did not resolve to a different path than intended.
+
+You can confirm the matched route by inspecting the requested path and the route file names. In file-based routing, the URL and file location need to agree.
+
+A form that posts to `/contacts/new` must be handled by `app/routes/contacts.new.tsx` in a route-file convention setup unless routing has been customized. A module named `contacts.tsx` will not handle `/contacts/new` unless the URL actually matches that route.
+
+## Handling validation errors without losing the page
+
+An `action` does not need to redirect on every submission. It can return validation errors to the same route, and the page can render them.
+
+```tsx
+import type { ActionFunctionArgs } from "@remix-run/node";
+import { json } from "@remix-run/node";
+import { Form, useActionData } from "@remix-run/react";
+
+export async function action({ request }: ActionFunctionArgs) {
+  const formData = await request.formData();
+  const email = String(formData.get("email") ?? "");
+
+  if (!email.includes("@")) {
+    return json({ error: "Invalid email" }, { status: 400 });
+  }
+
+  return json({ ok: true });
+}
+
+export default function ContactForm() {
+  const actionData = useActionData<typeof action>();
+
+  return (
+    <Form method="post">
+      <input name="email" type="email" />
+      <button type="submit">Submit</button>
+      {actionData?.error ? <p>{actionData.error}</p> : null}
+    </Form>
+  );
+}
+```
+
+The key point is still the same: the route that receives the `POST` must export `action`. Returning JSON, a response, or a redirect are all valid outcomes, but the export has to exist first.
+
+## Preventing the 404 from returning
+
+Prefer one of these two patterns:
+
+- Put the `loader` and `action` in the same route file when the page and mutation belong to the same URL.
+- Use an explicit absolute `action` when the form should submit to a different route.
+
+The first option is usually safer because it keeps the route URL, rendering logic, and mutation handler in one place. The second option is correct when the form is intentionally separated from the page it is rendered on.
+
+If you use relative actions, verify the resolved URL every time the route hierarchy changes. A refactor that moves a form component or changes the nested route structure can redirect the `POST` to a different module without changing the form markup much.
+
+The practical rule is simple: the URL that receives the form submission must point at a route module that exports `action`. If the route only exports `loader`, Remix will not process the mutation and will return `404 Not Found` for that `POST`.
