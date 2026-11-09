@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-08T23:15:24.453Z",
     "ideas": [
         {
-            "cell": "remix-action-redirect-missing-route::remix::relative-form-post",
-            "title": "Remix Returns 404 After a Form Posts to a Route That Has No Action",
-            "description": "A form submits successfully, but Remix responds with 404 because the matched route does not export an action.",
-            "tags": [
-                "remix",
-                "forms",
-                "routing",
-                "actions"
-            ],
-            "angle": "Open with the exact 404 symptom and the route URL that receives the POST. Explain how Remix selects the action from the matched route module, why a page route with only a loader cannot handle form submissions, and how relative action URLs can target the wrong module. Show the fix by exporting an action in the correct route file or pointing the form at the intended route explicitly.",
-            "slug": "remix-returns-404-after-a-form-posts-to-a-route-that-has-no-action"
-        },
-        {
             "cell": "electron-node-abi-native-module::electron::packaged-runtime",
             "title": "Electron Crashes on Startup When a Native Node Module Is Built for the Wrong ABI",
             "description": "Electron starts, then a native addon fails to load because the binary was compiled for Node instead of Electron's ABI.",
@@ -108,19 +95,18 @@
     ],
     "drafted": [
         {
-            "cell": "vite-workspace-alias::vite::package-json-import-graph",
-            "title": "Vite Resolves a Workspace Alias as Source Code Instead of the Published Package Entry",
-            "description": "Vite imports the wrong workspace file when an alias points at source instead of the package entry point.",
+            "cell": "remix-action-redirect-missing-route::remix::relative-form-post",
+            "title": "Remix Returns 404 After a Form Posts to a Route That Has No Action",
+            "description": "A form submits successfully, but Remix responds with 404 because the matched route does not export an action.",
             "tags": [
-                "vite",
-                "workspace",
-                "alias",
-                "package-json",
-                "build"
+                "remix",
+                "forms",
+                "routing",
+                "actions"
             ],
-            "angle": "Open with the import that resolves to an unexpected workspace path. Explain Vite's alias precedence, how `resolve.alias`, package exports, and source shortcuts interact, and why development can appear correct while production bundles differ. Show how to point imports at the public entry surface and avoid leaking internal source paths into consumers.",
-            "slug": "vite-resolves-a-workspace-alias-as-source-code-instead-of-the-published-package-entry",
-            "draftedAt": "2026-11-07T01:29:15.037Z"
+            "angle": "Open with the exact 404 symptom and the route URL that receives the POST. Explain how Remix selects the action from the matched route module, why a page route with only a loader cannot handle form submissions, and how relative action URLs can target the wrong module. Show the fix by exporting an action in the correct route file or pointing the form at the intended route explicitly.",
+            "slug": "remix-returns-404-after-a-form-posts-to-a-route-that-has-no-action",
+            "draftedAt": "2026-11-09T01:20:23.906Z"
         }
     ]
 }
