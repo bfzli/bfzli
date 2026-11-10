@@ -1,0 +1,316 @@
+---
+title: "Electron Crashes on Startup When a Native Node Module Is Built for the Wrong ABI"
+description: "Electron starts, then a native addon fails to load because the binary was compiled for Node instead of Electron's ABI."
+tags: ["electron", "native-modules", "node-abi", "packaging"]
+date: Nov 10, 2026
+cell: "electron-node-abi-native-module::electron::packaged-runtime"
+---
+
+`Error: The module 'sharp' was compiled against a different Node.js version using NODE_MODULE_VERSION 108. This version of Node.js requires NODE_MODULE_VERSION 115.` Electron starts, then the native addon fails to load because the binary was built for Node.js instead of Electron's runtime ABI.
+
+## What breaks
+
+The failure happens when Electron loads a native Node addon, usually from `require()` or `import` of a package that contains a compiled `.node` binary. The module name appears in the error, for example `sharp`, `sqlite3`, `better-sqlite3`, `bcrypt`, `canvas`, or `node-gyp`-based packages.
+
+Typical variants include:
+
+```text
+Error: The module 'better-sqlite3' was compiled against a different Node.js version using NODE_MODULE_VERSION 108. This version of Node.js requires NODE_MODULE_VERSION 119.
+```
+
+or:
+
+```text
+Error: Cannot find module '../build/Release/sharp-linux-x64.node'
+```
+
+or:
+
+```text
+Error: The module '/path/to/node_modules/sqlite3/lib/binding/napi-v6-linux-x64/node_sqlite3.node'
+was compiled against a different Node.js version using NODE_MODULE_VERSION 115.
+```
+
+The exact text depends on the package, the platform, and whether the binary is missing entirely or present but built for the wrong ABI.
+
+## Why Electron and Node.js binaries are not interchangeable
+
+Native addons are compiled against a binary interface, not just JavaScript source. That interface is identified by `NODE_MODULE_VERSION` for classic `nan` and `node-gyp` addons, and by a Node-API version for `napi` addons.
+
+Electron ships its own embedded version of Node.js and Chromium. The Node.js API surface exposed inside Electron is not the same as the system Node.js binary used to run `npm install`, even when the JavaScript version numbers look close.
+
+The important point is the ABI, not the JavaScript API. A native addon compiled for:
+
+- Node.js `v20.x` may have `NODE_MODULE_VERSION 115`
+- Electron `v30.x` may embed a different Node.js and a different `NODE_MODULE_VERSION`
+
+If you build the addon while `npm` is using the system `node`, the resulting binary is linked to that system runtime. Electron then tries to load it and rejects it because the ABI identifier does not match.
+
+That mismatch is enough to fail at startup. Electron does not translate between ABIs. The binary either matches the runtime it is loaded into or it does not.
+
+## What causes the mismatch
+
+The common causes are:
+
+1. `npm install` or `pnpm install` runs under system Node.js instead of Electron headers.
+2. A dependency installs a prebuilt binary for Node.js, not Electron.
+3. `node_modules` is reused after changing Electron version, Node.js version, platform, or architecture.
+4. A lockfile or cache preserves a binary compiled against an earlier ABI.
+5. Packaging copies `node_modules` across environments without rebuilding native modules.
+
+A native addon is tied to all of these dimensions:
+
+- runtime: Node.js vs Electron
+- Electron version
+- OS: Windows, macOS, Linux
+- architecture: `x64`, `arm64`
+- C library and build environment for some packages
+
+If any of those change, the previously compiled binary may no longer load.
+
+## Why rebuilding is required after install or package changes
+
+The compiled `.node` file is not JavaScript source. It is a platform-specific shared library. A package install can trigger compilation, but only against the headers and runtime visible at install time.
+
+If the install step uses the wrong target, the build output is wrong even though the package installation succeeds. If the Electron version changes, the ABI target changes with it. If a dependency is added or upgraded and introduces or changes a native binding, the existing binary set may become stale.
+
+That is why rebuilding native addons is part of Electron packaging, not an optional cleanup step. The code that loads the addon has no way to fix the binary after the fact. The binary itself has to be regenerated for the target Electron ABI.
+
+## How to confirm the ABI mismatch
+
+You can inspect the ABI versions directly.
+
+```bash
+node -p "process.versions.modules"
+```
+
+and inside Electron:
+
+```bash
+npx electron -e "console.log(process.versions.modules)"
+```
+
+If those values differ, a binary compiled for one runtime is not guaranteed to load in the other.
+
+You can also inspect the runtime version exposed by Electron:
+
+```bash
+npx electron -e "console.log(process.versions)"
+```
+
+For a package using `node-gyp`, the error text usually mentions `NODE_MODULE_VERSION`. For a Node-API package, the failure may instead mention a missing prebuilt binary or an unresolved shared object, but the root cause is still the same: the native file does not match the runtime that is trying to load it.
+
+## Fix 1: rebuild native modules for Electron with `electron-rebuild`
+
+The most direct fix is to rebuild all native dependencies against the Electron headers in use.
+
+Install `electron-rebuild` as a dev dependency:
+
+```bash
+npm install --save-dev electron-rebuild
+```
+
+Then run it after installing dependencies:
+
+```bash
+npx electron-rebuild
+```
+
+If you need to target a specific Electron version:
+
+```bash
+npx electron-rebuild -v 30.1.2
+```
+
+If your project uses a different package manager, the command is the same through `npx` or the package manager equivalent. The key is that `electron-rebuild` resolves the Electron version and rebuilds the native modules against that runtime rather than the host Node.js binary.
+
+For npm scripts:
+
+```json
+{
+  "scripts": {
+    "postinstall": "electron-rebuild -f -w sharp,better-sqlite3"
+  }
+}
+```
+
+The `-f` flag forces a rebuild. The `-w` flag scopes the rebuild to selected packages, which is useful when only a few dependencies are native. If you want all native modules rebuilt, omit `-w`.
+
+A common pattern is:
+
+```json
+{
+  "scripts": {
+    "postinstall": "electron-rebuild -f"
+  }
+}
+```
+
+This ensures the compiled output stays aligned with the current Electron version after `npm install`.
+
+## Fix 2: rebuild with `npm rebuild` and Electron headers
+
+`npm rebuild` can work if you point it at the Electron runtime and headers used by the app.
+
+Set `npm_config_runtime`, `npm_config_target`, and `npm_config_disturl` so `node-gyp` uses Electron artifacts instead of system Node.js headers:
+
+```bash
+npm rebuild --runtime=electron --target=30.1.2 --dist-url=https://electronjs.org/headers
+```
+
+If you are invoking a specific package:
+
+```bash
+npm rebuild better-sqlite3 --runtime=electron --target=30.1.2 --dist-url=https://electronjs.org/headers
+```
+
+This is the lower-level mechanism behind many Electron rebuild workflows. It tells `node-gyp` to fetch and compile against Electron’s headers, producing a binary that matches Electron’s ABI.
+
+For environments where environment variables are preferred:
+
+```bash
+export npm_config_runtime=electron
+export npm_config_target=30.1.2
+export npm_config_disturl=https://electronjs.org/headers
+npm rebuild
+```
+
+This works best when the package actually builds from source. If the package uses a prebuilt binary system, you may need to disable that package’s default prebuild path or instruct it to fetch Electron-specific artifacts.
+
+## Fix 3: ship a prebuilt binary for the Electron version in use
+
+For packages you control, or for a custom native addon, the most stable option is to publish prebuilt binaries for the Electron version you support.
+
+The package can use a system such as `prebuild`, `prebuildify`, or `node-pre-gyp` to publish artifacts keyed by:
+
+- runtime `electron`
+- Electron version
+- platform
+- architecture
+
+A loader can then select the right binary at install time.
+
+Example package scripts with `prebuildify`:
+
+```json
+{
+  "scripts": {
+    "install": "node-gyp-build"
+  },
+  "devDependencies": {
+    "prebuildify": "^6.0.0",
+    "node-gyp-build": "^4.8.0"
+  }
+}
+```
+
+Build the precompiled artifact for Electron:
+
+```bash
+npx prebuildify --runtime electron --target 30.1.2
+```
+
+Then ship the generated `.node` binary with the package release.
+
+This approach avoids local compilation on end-user machines and reduces the chance of ABI drift, provided the package publishes the correct build for each Electron release you support.
+
+For third-party packages that already publish prebuilds, make sure the package version you install includes Electron-compatible binaries. If it only publishes Node.js binaries, Electron will still fail unless the module falls back to source compilation at install time.
+
+## Why reinstalling alone is not always enough
+
+Deleting `node_modules` and reinstalling only helps if the reinstall actually rebuilds the native modules for Electron. A plain reinstall under the wrong runtime just reproduces the mismatch.
+
+For example, this sequence still fails if `npm` is using system Node.js:
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+npx electron .
+```
+
+The installation succeeded, but the native modules were compiled for the host Node.js ABI. Electron then loads the wrong binary.
+
+A correct reinstall includes an Electron-targeted rebuild step:
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+npx electron-rebuild -f
+npx electron .
+```
+
+Or, if you are packaging the app, rebuild during the packaging pipeline so the final artifact contains the Electron-compatible binaries.
+
+## Practical packaging pattern
+
+For a typical Electron app, the install and rebuild flow can be scripted like this:
+
+```json
+{
+  "scripts": {
+    "postinstall": "electron-rebuild -f",
+    "start": "electron .",
+    "dist": "electron-builder"
+  }
+}
+```
+
+If packaging with `electron-builder`, use its native dependency handling carefully. Native modules still need to be rebuilt for the target Electron version before the final package is assembled.
+
+A CI-oriented flow often looks like this:
+
+```bash
+npm ci
+npm run postinstall
+npm run dist
+```
+
+If the app supports multiple platforms or architectures, rebuild on each target platform or use a build environment that matches the target binary. A Linux `x64` binary is not reusable on macOS `arm64`, even if the Electron version matches.
+
+## When Node-API helps and when it does not
+
+Some addons are built on Node-API (`napi`) rather than the older V8 or `nan` bindings. Node-API reduces breakage across Node.js versions because the API is intended to stay stable.
+
+That still does not remove the need to ship the correct binary for Electron when the package contains a native `.node` file. It only reduces how often recompilation is required across Node.js releases.
+
+If the module exposes a prebuilt binary tied to `napi`, Electron can often load it across several versions. If the package still targets a specific ABI or ships only a Node.js build, rebuilding remains necessary.
+
+So Node-API can reduce maintenance, but it does not eliminate runtime compatibility checks.
+
+## Verifying the fix
+
+After rebuilding, start Electron and confirm the module loads without the ABI error.
+
+A quick check with a small entrypoint helps isolate the failure:
+
+```ts
+// main.ts
+import { app, BrowserWindow } from "electron"
+import sharp from "sharp"
+
+app.whenReady().then(() => {
+  console.log(sharp.version)
+  const win = new BrowserWindow({ width: 800, height: 600 })
+  win.loadURL("data:text/html,<h1>OK</h1>")
+})
+```
+
+If the module loads successfully, the binary matches Electron’s runtime.
+
+If it still fails, check:
+
+- the Electron version used for rebuild
+- whether a cached binary is being reused
+- whether install scripts are skipped in CI with `--ignore-scripts`
+- whether the package downloaded a Node.js prebuild instead of an Electron-specific one
+- whether packaging copied a `node_modules` tree from a different environment
+
+## Keeping the problem from coming back
+
+Prefer `electron-rebuild` when you depend on third-party native modules and want a simple project-level fix. It handles the common case where Electron’s ABI changes and the dependency tree needs to be rebuilt after install.
+
+Prefer `npm rebuild` with Electron headers when you need explicit low-level control or are integrating with an existing build pipeline.
+
+Prefer prebuilt binaries when you maintain the native module yourself or need consistent installs without local compilation. That is the cleanest option for distribution, because the binary can be matched to the exact Electron version, OS, and architecture ahead of time.
+
+The practical rule is simple: any time Electron, platform, architecture, or native dependency version changes, rebuild or replace the native binary before launching the app. That is the only way to keep a module compiled for one runtime from crashing when Electron loads it.
