@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-08T23:15:24.453Z",
     "ideas": [
         {
-            "cell": "vite-base-path-relative-imports::vite::nested-deploy-root",
-            "title": "Vite Serves 404s for CSS and JS When the App Is Deployed Under a Nested Path",
-            "description": "Built assets load from `/` instead of the deployment subpath, so the browser requests files that do not exist.",
-            "tags": [
-                "vite",
-                "deploy",
-                "assets",
-                "base-path"
-            ],
-            "angle": "Open with the missing asset URLs and the 404s they produce in the browser. Explain how Vite bakes the `base` setting into emitted URLs during build and why a nested deployment path breaks absolute references. Show how to set `base` in `vite.config.ts`, adjust router basename if needed, and verify the generated HTML points at the deployed prefix.",
-            "slug": "vite-serves-404s-for-css-and-js-when-the-app-is-deployed-under-a-nested-path"
-        },
-        {
             "cell": "astro-endpoint-method-handler::astro::missing-http-method",
             "title": "Astro Returns 405 When an Endpoint Does Not Export the Right HTTP Method",
             "description": "A request reaches an Astro endpoint, but the response is 405 because the file does not export the matching method handler.",
@@ -82,18 +69,18 @@
     ],
     "drafted": [
         {
-            "cell": "electron-node-abi-native-module::electron::packaged-runtime",
-            "title": "Electron Crashes on Startup When a Native Node Module Is Built for the Wrong ABI",
-            "description": "Electron starts, then a native addon fails to load because the binary was compiled for Node instead of Electron's ABI.",
+            "cell": "vite-base-path-relative-imports::vite::nested-deploy-root",
+            "title": "Vite Serves 404s for CSS and JS When the App Is Deployed Under a Nested Path",
+            "description": "Built assets load from `/` instead of the deployment subpath, so the browser requests files that do not exist.",
             "tags": [
-                "electron",
-                "native-modules",
-                "node-abi",
-                "packaging"
+                "vite",
+                "deploy",
+                "assets",
+                "base-path"
             ],
-            "angle": "Start with the native module load error and the exact module name. Explain the ABI mismatch between Node.js and Electron, how that breaks addons built against the wrong runtime, and why rebuilding is required after install or package changes. Cover the fix with electron-rebuild, npm rebuild with electron headers, or shipping a prebuilt binary for the Electron version in use.",
-            "slug": "electron-crashes-on-startup-when-a-native-node-module-is-built-for-the-wrong-abi",
-            "draftedAt": "2026-11-10T03:54:57.055Z"
+            "angle": "Open with the missing asset URLs and the 404s they produce in the browser. Explain how Vite bakes the `base` setting into emitted URLs during build and why a nested deployment path breaks absolute references. Show how to set `base` in `vite.config.ts`, adjust router basename if needed, and verify the generated HTML points at the deployed prefix.",
+            "slug": "vite-serves-404s-for-css-and-js-when-the-app-is-deployed-under-a-nested-path",
+            "draftedAt": "2026-11-11T01:37:37.537Z"
         }
     ]
 }
