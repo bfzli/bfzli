@@ -1,0 +1,263 @@
+---
+title: "Vite Serves 404s for CSS and JS When the App Is Deployed Under a Nested Path"
+description: "Built assets load from `/` instead of the deployment subpath, so the browser requests files that do not exist."
+tags: ["vite", "deploy", "assets", "base-path"]
+date: Nov 11, 2026
+cell: "vite-base-path-relative-imports::vite::nested-deploy-root"
+---
+
+Browser requests `http://localhost:4173/assets/index-8f3c1d2e.css` and `http://localhost:4173/assets/index-8f3c1d2e.js` return `404 Not Found` after deployment under `/my-app/`, and the app loads without styles or JavaScript.
+
+## Why the browser asks for the wrong URLs
+
+Vite does not resolve asset URLs at runtime from the current page path. During `vite build`, it rewrites references in the generated HTML and JavaScript bundles using the configured `base` value. When `base` is `/`, emitted asset URLs are root-absolute, such as:
+
+```html
+<link rel="stylesheet" crossorigin href="/assets/index-8f3c1d2e.css">
+<script type="module" crossorigin src="/assets/index-8f3c1d2e.js"></script>
+```
+
+That works when the application is served from the domain root. It fails when the app is deployed under a nested path like `/my-app/`, because the browser requests `/assets/...` instead of `/my-app/assets/...`.
+
+The server then looks for files at the root of the origin. If the deployment only exposes the app beneath `/my-app/`, those root paths do not exist, so the browser shows 404s for the CSS and JavaScript.
+
+This is a build-time path problem, not a runtime routing problem. The asset URLs are baked into the output before the app runs.
+
+## How Vite uses `base`
+
+Vite’s `base` config controls the public path prefix for built assets and runtime imports. It affects:
+
+- URLs in the generated `index.html`
+- URLs created by `import.meta.env.BASE_URL`
+- chunk loading and dynamic imports
+- asset references that Vite rewrites during build
+
+If `base` is `/my-app/`, Vite emits URLs with that prefix. If `base` is `/`, Vite emits root-absolute URLs.
+
+The important detail is that Vite does not infer the deployment subpath from your router, reverse proxy, or hosting platform. You must set it explicitly.
+
+For example, a project deployed at `https://example.com/my-app/` needs this configuration:
+
+```ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  base: '/my-app/',
+});
+```
+
+That trailing slash matters. Vite expects a normalized base path for subpath deployments.
+
+## Why absolute references break under a nested deployment path
+
+A browser resolves root-absolute URLs from the origin root, not from the page path. If the current page is `https://example.com/my-app/`, then:
+
+- `/assets/index-8f3c1d2e.css` resolves to `https://example.com/assets/index-8f3c1d2e.css`
+- `/assets/index-8f3c1d2e.js` resolves to `https://example.com/assets/index-8f3c1d2e.js`
+
+Those are different from:
+
+- `https://example.com/my-app/assets/index-8f3c1d2e.css`
+- `https://example.com/my-app/assets/index-8f3c1d2e.js`
+
+If your server or CDN only publishes files under `/my-app/`, the root-absolute version returns 404.
+
+This is why the same build can work locally at `/` and fail in production under a prefix. The build output is correct for the configured base, but incorrect for the deployment path.
+
+## Configure `base` in `vite.config.ts`
+
+Set `base` to the exact path segment where the app is hosted. Use a leading and trailing slash for a subpath.
+
+```ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  base: '/my-app/',
+});
+```
+
+If the app is served from the root, keep the default:
+
+```ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  base: '/',
+});
+```
+
+If deployment differs by environment, derive the value from an environment variable:
+
+```ts
+import { defineConfig, loadEnv } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  return {
+    plugins: [react()],
+    base: env.VITE_BASE_PATH || '/',
+  };
+});
+```
+
+Then set `VITE_BASE_PATH=/my-app/` in the production environment. Keep the value consistent with the path used by your server.
+
+## Verify the generated HTML points at the deployed prefix
+
+After building, inspect `dist/index.html`. The asset URLs should include the deployment prefix.
+
+Run the build:
+
+```bash
+npm run build
+```
+
+Then inspect the emitted HTML:
+
+```bash
+sed -n '1,120p' dist/index.html
+```
+
+A correct output for a nested deployment looks like this:
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <script type="module" crossorigin src="/my-app/assets/index-8f3c1d2e.js"></script>
+    <link rel="stylesheet" crossorigin href="/my-app/assets/index-8f3c1d2e.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+```
+
+If you still see `/assets/...` without the prefix, the `base` setting is not being applied to the build you are shipping.
+
+It is also worth checking the final bundle for dynamic imports or asset URLs. Vite rewrites them using the same base path, so one incorrect configuration affects more than the HTML entry point.
+
+## Adjust the router basename if the app uses client-side routing
+
+If the application uses React Router, Vue Router, or another client-side router, the router path prefix must usually match the Vite `base`.
+
+For React Router, set `basename`:
+
+```tsx
+import { BrowserRouter } from 'react-router-dom';
+import App from './App';
+
+export function Root() {
+  return (
+    <BrowserRouter basename="/my-app">
+      <App />
+    </BrowserRouter>
+  );
+}
+```
+
+Note the difference:
+
+- Vite `base`: `'/my-app/'`
+- Router `basename`: `'/my-app'`
+
+The router basename usually omits the trailing slash. Vite’s base usually includes it for subpath deployments.
+
+If you omit the router basename while deploying under a prefix, client-side navigation can generate incorrect links or mismatch the URL space. The result is separate from the asset 404s, but the same deployment prefix causes both problems.
+
+For Vue Router:
+
+```ts
+import { createRouter, createWebHistory } from 'vue-router';
+
+export const router = createRouter({
+  history: createWebHistory('/my-app/'),
+  routes: [
+    // routes here
+  ],
+});
+```
+
+The exact API depends on the router package, but the principle is the same. The application’s route base must align with the deployment prefix.
+
+## Make sure the server actually serves the files under the prefix
+
+Changing `base` only changes emitted URLs. It does not configure your server.
+
+The server or hosting layer must map `/my-app/` to the built files in `dist/`. For a simple static server, this often means serving `dist/` as the document root for that subpath or configuring a rewrite rule.
+
+For example, with `serve`:
+
+```bash
+npm install --save-dev serve
+npx serve dist -l 4173
+```
+
+That serves `dist/` at the origin root. To test a nested prefix, you need a server or reverse proxy that exposes the app at `/my-app/`.
+
+A common verification approach is to build and serve behind the same prefix used in production, then open the page and inspect the network requests in DevTools. The requested CSS and JS files should include `/my-app/` in their path.
+
+## Use the built-in base URL in code when needed
+
+Some applications need the public base at runtime, for example when constructing asset URLs manually. Vite exposes `import.meta.env.BASE_URL`.
+
+```ts
+const logoUrl = `${import.meta.env.BASE_URL}images/logo.svg`;
+```
+
+If `base` is `/my-app/`, this becomes `/my-app/images/logo.svg` after build. That is safer than hardcoding `/`-prefixed paths in application code.
+
+Do not use `window.location.pathname` as a substitute for the deployment prefix. The page path can include route segments that are unrelated to the asset root.
+
+## Common misconfigurations
+
+A few configuration mistakes produce the same 404 pattern.
+
+### `base` set without the correct prefix
+
+Setting `base` to `/my-app` instead of `/my-app/` can produce inconsistent URL joining depending on the asset and build target. Use the normalized trailing-slash form for a subpath.
+
+### Router configured but Vite not configured
+
+A router basename alone does not change the URLs in `dist/index.html`. The browser still loads CSS and JS from whatever Vite emitted.
+
+### Vite configured but reverse proxy strips the prefix
+
+If the proxy serves the app at `/my-app/` but forwards requests to a backend that expects `/`, the HTML may be correct while asset requests still 404. In that case, the proxy needs a rewrite or the backend needs to serve the prefix.
+
+### Hardcoded root-absolute URLs in source
+
+If application code contains `href="/styles/site.css"` or `src="/logo.svg"`, those references bypass the base prefix. Prefer imports or `import.meta.env.BASE_URL` when the path must be deployment-aware.
+
+## End-to-end verification
+
+A reliable check is to build, inspect, and request the emitted assets under the deployment prefix.
+
+```bash
+npm run build
+grep -n 'assets/' dist/index.html
+```
+
+Then request one of the emitted URLs through the same host and path prefix used in production:
+
+```bash
+curl -I https://example.com/my-app/assets/index-8f3c1d2e.css
+curl -I https://example.com/my-app/assets/index-8f3c1d2e.js
+```
+
+Each should return `200 OK`. If either returns `404 Not Found`, the deployment path and the emitted asset URLs are still out of sync.
+
+Also check the browser DevTools Network tab. The CSS and JS requests should show the prefixed path. If they show `/assets/...`, the build is still using `base: '/'`.
+
+## Practical takeaway
+
+Prefer setting Vite `base` to the exact deployment subpath, then match the router basename if the app uses client-side routing. That fixes the emitted HTML, the asset URLs, and the route prefix together.
+
+The check that prevents the problem from coming back is simple: after every production build, inspect `dist/index.html` and confirm the asset URLs begin with the deployed prefix. If they do not, the browser will keep requesting files from `/` and the 404s will continue.
