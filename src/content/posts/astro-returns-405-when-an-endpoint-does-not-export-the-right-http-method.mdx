@@ -1,0 +1,357 @@
+---
+title: "Astro Returns 405 When an Endpoint Does Not Export the Right HTTP Method"
+description: "A request reaches an Astro endpoint, but the response is 405 because the file does not export the matching method handler."
+tags: ["astro", "api", "http", "endpoints"]
+date: Nov 12, 2026
+cell: "astro-endpoint-method-handler::astro::missing-http-method"
+---
+
+A `POST` request to an Astro endpoint returns `405 Method Not Allowed` with no matching handler in the file.
+
+## How Astro maps endpoint files to HTTP methods
+
+Astro treats files under `src/pages` as routes. When the file is an endpoint rather than a page, it exports functions named after HTTP methods. A request method is matched against those named exports.
+
+For example, this file:
+
+```ts
+// src/pages/api/users.ts
+export async function GET() {
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+```
+
+handles `GET /api/users`. If a request uses `POST`, `PUT`, or `DELETE`, Astro looks for `POST`, `PUT`, or `DELETE` exports in the same file. If none exists, Astro returns `405 Method Not Allowed`.
+
+The match is method-specific. `GET` does not satisfy `POST`, and a default export does not count as a method handler.
+
+## Why the 405 happens
+
+A `405` from Astro usually means the route exists, but the endpoint file does not export a function for the requested verb.
+
+Astro’s endpoint resolver checks the compiled page module for named exports such as:
+
+- `GET`
+- `POST`
+- `PUT`
+- `PATCH`
+- `DELETE`
+- `OPTIONS`
+- `HEAD`
+
+If the incoming request is `POST /api/users` and the file only exports `GET`, the route path is valid but there is no `POST` handler. Astro can route to the file, but it cannot execute a handler for that method, so it responds with `405`.
+
+A common variant is a file that exports a default function:
+
+```ts
+// src/pages/api/users.ts
+export default async function handler() {
+  return new Response('ok');
+}
+```
+
+That pattern does not define an endpoint method in Astro. It is not equivalent to `GET` or `POST`. For endpoint files, Astro expects named exports that match HTTP verbs.
+
+## The file name and path must match the route
+
+Before checking the method export, confirm that the file is actually the route you think it is.
+
+Astro route files under `src/pages` map to URLs using the file path:
+
+- `src/pages/api/users.ts` -> `/api/users`
+- `src/pages/api/users.json.ts` -> `/api/users.json`
+- `src/pages/api/users/index.ts` -> `/api/users`
+- `src/pages/api/users/[id].ts` -> `/api/users/:id`
+
+If the file name pattern is wrong, the request may hit a different route than expected, or no route at all.
+
+For endpoint files, the extension matters too. A file like `src/pages/api/users.ts` is valid as an endpoint. A React component file in the same place, or a `.astro` page with no endpoint export, behaves differently.
+
+Use this command to inspect the route tree in your project:
+
+```bash
+npx astro check
+```
+
+If the route path is not what you expect, verify the location and filename in `src/pages`.
+
+## Export the exact HTTP method
+
+The most direct fix is to export the method that the client actually sends.
+
+If the request is `POST`, export `POST`:
+
+```ts
+// src/pages/api/users.ts
+export async function POST({ request }: { request: Request }) {
+  const body = await request.json();
+
+  return new Response(JSON.stringify({
+    created: true,
+    user: body,
+  }), {
+    status: 201,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+```
+
+If the request is `GET`, export `GET`:
+
+```ts
+// src/pages/api/users.ts
+export async function GET() {
+  return new Response(JSON.stringify({
+    users: [],
+  }), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+```
+
+If the endpoint needs multiple verbs, export each one explicitly:
+
+```ts
+// src/pages/api/users/[id].ts
+export async function GET({ params }: { params: { id: string } }) {
+  return new Response(JSON.stringify({
+    id: params.id,
+  }), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+export async function DELETE({ params }: { params: { id: string } }) {
+  return new Response(null, { status: 204 });
+}
+```
+
+Each export is independent. A `POST` handler does not affect `GET`, and vice versa.
+
+## Why a default export does not work
+
+A default export is not part of Astro’s endpoint contract for verb routing. The endpoint loader looks for named exports that correspond to methods.
+
+This file will not handle `POST` correctly:
+
+```ts
+// src/pages/api/users.ts
+export default async function handler() {
+  return new Response('ok');
+}
+```
+
+Even though the function returns a `Response`, Astro does not treat `default` as `GET`, `POST`, or any other verb. As a result, the request reaches the route but no method handler is found, and the framework returns `405`.
+
+If you need a shared implementation, use a helper function and call it from each exported verb handler:
+
+```ts
+async function createUser(request: Request) {
+  const data = await request.json();
+
+  return new Response(JSON.stringify({
+    ok: true,
+    data,
+  }), {
+    status: 201,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+export const POST = ({ request }: { request: Request }) => createUser(request);
+```
+
+That keeps the route contract intact while avoiding duplicate logic.
+
+## Confirm the client is sending the method you expect
+
+A route can be correct and still return `405` if the client is using the wrong verb.
+
+Check the request with `curl`:
+
+```bash
+curl -i -X POST http://localhost:4321/api/users \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Ada"}'
+```
+
+For a `GET` request, do not use `-X POST` by mistake:
+
+```bash
+curl -i http://localhost:4321/api/users
+```
+
+In browser code, `fetch()` defaults to `GET` unless `method` is set:
+
+```ts
+await fetch('/api/users', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({ name: 'Ada' }),
+});
+```
+
+If the client sends `POST` but the endpoint only exports `GET`, the server is behaving as designed. The fix is to align the request method with the exported handler, not to change status codes manually.
+
+## Return the correct status code and body
+
+The handler should return a status code that matches the action.
+
+Common choices:
+
+- `200 OK` for a successful read
+- `201 Created` for a successful create
+- `204 No Content` for a successful delete or update with no response body
+- `400 Bad Request` for invalid input
+- `404 Not Found` when an identifier does not match a resource
+- `405 Method Not Allowed` only when the route exists but the method should not be supported
+
+An endpoint that creates data should usually use `201`:
+
+```ts
+// src/pages/api/users.ts
+export async function POST({ request }: { request: Request }) {
+  const payload = await request.json();
+
+  if (!payload || typeof payload !== 'object') {
+    return new Response(JSON.stringify({
+      error: 'Invalid JSON body',
+    }), {
+      status: 400,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  }
+
+  return new Response(JSON.stringify({
+    id: 'user_123',
+    ...payload,
+  }), {
+    status: 201,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+```
+
+If the endpoint should reject a method intentionally, you can still export the method and return your own `405` response. That is different from Astro returning `405` because no handler exists.
+
+```ts
+export async function POST() {
+  return new Response(JSON.stringify({
+    error: 'POST is not supported on this route',
+  }), {
+    status: 405,
+    headers: {
+      'Content-Type': 'application/json',
+      'Allow': 'GET',
+    },
+  });
+}
+```
+
+That pattern is only useful when the route must exist but a method is explicitly disallowed. Otherwise, the simpler fix is to export the correct handler.
+
+## A complete example with `GET` and `POST`
+
+This endpoint supports both reading and creating users.
+
+```ts
+// src/pages/api/users.ts
+type User = {
+  id: string;
+  name: string;
+};
+
+const users: User[] = [
+  { id: 'user_1', name: 'Ada' },
+];
+
+export async function GET() {
+  return new Response(JSON.stringify(users), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+export async function POST({ request }: { request: Request }) {
+  const body = await request.json();
+
+  if (typeof body?.name !== 'string' || body.name.trim() === '') {
+    return new Response(JSON.stringify({
+      error: 'name is required',
+    }), {
+      status: 400,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  }
+
+  const user: User = {
+    id: `user_${users.length + 1}`,
+    name: body.name,
+  };
+
+  users.push(user);
+
+  return new Response(JSON.stringify(user), {
+    status: 201,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+```
+
+With this file in place:
+
+- `GET /api/users` returns the list
+- `POST /api/users` creates a user
+- `PUT /api/users` still returns `405` unless `PUT` is exported
+
+That behavior is method-based, not path-based.
+
+## Troubleshooting checklist
+
+If you see `405 Method Not Allowed`, verify these points in order:
+
+1. The file is under `src/pages` and matches the intended route.
+2. The filename pattern is correct, such as `users.ts`, `users.json.ts`, or `[id].ts`.
+3. The file exports the exact method name, such as `GET` or `POST`.
+4. The client sends the same HTTP method that the handler exports.
+5. The response status inside the handler is appropriate for the action.
+
+You can also inspect the route with a direct request:
+
+```bash
+curl -i http://localhost:4321/api/users
+curl -i -X POST http://localhost:4321/api/users -H 'Content-Type: application/json' -d '{}'
+```
+
+If `GET` works and `POST` returns `405`, the file is reachable and the missing piece is the `POST` export.
+
+## Practical takeaway
+
+Prefer exporting the exact HTTP method handler in the endpoint file, because that is the mechanism Astro uses to bind requests to routes. A default export does not satisfy that contract, and a wrong filename pattern can point the request at a different route or no endpoint at all. To prevent the `405` from returning, keep the route path under `src/pages`, export named functions like `GET` and `POST`, and match the client’s request method to the handler you define.
