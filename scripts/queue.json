@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-08T23:15:24.453Z",
     "ideas": [
         {
-            "cell": "astro-endpoint-method-handler::astro::missing-http-method",
-            "title": "Astro Returns 405 When an Endpoint Does Not Export the Right HTTP Method",
-            "description": "A request reaches an Astro endpoint, but the response is 405 because the file does not export the matching method handler.",
-            "tags": [
-                "astro",
-                "api",
-                "http",
-                "endpoints"
-            ],
-            "angle": "Begin with the 405 response and the request method that fails. Explain how Astro endpoint files map exported functions like `GET` and `POST` to HTTP verbs, and why a default export or the wrong filename pattern leaves no handler for the request. Show how to export the exact method function, confirm the route path, and return the proper status code and body.",
-            "slug": "astro-returns-405-when-an-endpoint-does-not-export-the-right-http-method"
-        },
-        {
             "cell": "hono-request-body-parse-order::hono::json-middleware-order",
             "title": "Hono Rejects a JSON Request When Middleware Reads the Body Before the Route Handler",
             "description": "The handler cannot parse JSON because an earlier middleware consumed the request body first.",
@@ -69,18 +56,18 @@
     ],
     "drafted": [
         {
-            "cell": "vite-base-path-relative-imports::vite::nested-deploy-root",
-            "title": "Vite Serves 404s for CSS and JS When the App Is Deployed Under a Nested Path",
-            "description": "Built assets load from `/` instead of the deployment subpath, so the browser requests files that do not exist.",
+            "cell": "astro-endpoint-method-handler::astro::missing-http-method",
+            "title": "Astro Returns 405 When an Endpoint Does Not Export the Right HTTP Method",
+            "description": "A request reaches an Astro endpoint, but the response is 405 because the file does not export the matching method handler.",
             "tags": [
-                "vite",
-                "deploy",
-                "assets",
-                "base-path"
+                "astro",
+                "api",
+                "http",
+                "endpoints"
             ],
-            "angle": "Open with the missing asset URLs and the 404s they produce in the browser. Explain how Vite bakes the `base` setting into emitted URLs during build and why a nested deployment path breaks absolute references. Show how to set `base` in `vite.config.ts`, adjust router basename if needed, and verify the generated HTML points at the deployed prefix.",
-            "slug": "vite-serves-404s-for-css-and-js-when-the-app-is-deployed-under-a-nested-path",
-            "draftedAt": "2026-11-11T01:37:37.537Z"
+            "angle": "Begin with the 405 response and the request method that fails. Explain how Astro endpoint files map exported functions like `GET` and `POST` to HTTP verbs, and why a default export or the wrong filename pattern leaves no handler for the request. Show how to export the exact method function, confirm the route path, and return the proper status code and body.",
+            "slug": "astro-returns-405-when-an-endpoint-does-not-export-the-right-http-method",
+            "draftedAt": "2026-11-12T02:37:36.131Z"
         }
     ]
 }
