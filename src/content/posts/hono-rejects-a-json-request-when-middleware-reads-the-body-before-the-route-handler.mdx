@@ -1,0 +1,330 @@
+---
+title: "Hono Rejects a JSON Request When Middleware Reads the Body Before the Route Handler"
+description: "The handler cannot parse JSON because an earlier middleware consumed the request body first."
+tags: ["hono", "middleware", "json", "request-body"]
+date: Nov 13, 2026
+cell: "hono-request-body-parse-order::hono::json-middleware-order"
+---
+
+A `POST /api/*` request in Hono fails with `SyntaxError: Unexpected end of JSON input` when the route handler calls `await c.req.json()` after middleware has already read the body.
+
+## What breaks
+
+The failure usually appears on a JSON endpoint that has request-body middleware registered before the route handler.
+
+A minimal example is a `POST` route such as `/api/users` or `/api/login` where middleware calls `await req.text()`, `await req.json()`, or `await req.arrayBuffer()`, and the handler later calls `await c.req.json()` again.
+
+The second read fails because the request body has already been consumed. In Hono, `c.req` wraps the Fetch API `Request`, so the body follows standard `ReadableStream` semantics.
+
+The error text is typically one of these:
+
+```text
+SyntaxError: Unexpected end of JSON input
+```
+
+or, depending on where parsing happens:
+
+```text
+TypeError: Body is unusable
+```
+
+The exact text depends on the adapter, runtime, and which body-reading method runs first. The root problem is the same: the body stream can only be consumed once.
+
+## Why this happens
+
+A Fetch `Request` body is a one-shot stream.
+
+Methods such as `request.text()`, `request.json()`, `request.formData()`, and `request.arrayBuffer()` read from that stream. Once one of them drains the stream, later reads see an empty body. There is no automatic rewind.
+
+Hono does not duplicate the request body for each middleware. Middleware and handlers run against the same underlying `Request` object. If a middleware reads the body before control reaches the route handler, the handler receives a request whose body has already been exhausted.
+
+That matters most for JSON endpoints because `c.req.json()` expects bytes that form valid JSON. If the stream is empty, the parser sees `""` and throws `SyntaxError: Unexpected end of JSON input`.
+
+## Reproducing the failure
+
+The following app reproduces the problem. The middleware reads the request body for logging, then the route handler tries to parse JSON again.
+
+```ts
+import { Hono } from 'hono'
+
+const app = new Hono()
+
+app.use('/api/*', async (c, next) => {
+  const body = await c.req.text()
+  console.log('incoming body:', body)
+  await next()
+})
+
+app.post('/api/users', async (c) => {
+  const data = await c.req.json()
+  return c.json({ ok: true, data })
+})
+
+export default app
+```
+
+Run it with a Hono-compatible runtime, for example:
+
+```bash
+npm i hono
+```
+
+Send a JSON request:
+
+```bash
+curl -i \
+  -X POST http://localhost:3000/api/users \
+  -H 'content-type: application/json' \
+  -d '{"name":"Ada"}'
+```
+
+The middleware consumes the body with `await c.req.text()`. By the time the handler calls `await c.req.json()`, nothing is left to parse.
+
+The same failure appears if middleware uses `req.json()` first and the handler uses `req.text()` later. The method does not matter. The first consumer wins.
+
+## The mechanism inside Hono
+
+Hono middleware is composed in order. For a request that matches `/api/*`, each matching middleware runs before the final handler.
+
+A simplified execution path looks like this:
+
+1. Middleware runs.
+2. Middleware calls a body-reading method.
+3. The request body stream is drained.
+4. `await next()` passes control to the next layer.
+5. The route handler runs.
+6. The handler tries to read the body again.
+7. Parsing fails because the body is empty.
+
+This is not unique to Hono. It is standard Fetch behavior. Hono simply exposes that behavior directly through `c.req`.
+
+The important implication is that request-body parsing is not idempotent unless the data has already been buffered somewhere else. A body can be cloned with `request.clone()` before either consumer reads it, but cloning still means each consumer reads from a separate stream. Without that, the original stream is gone after the first read.
+
+## Fix 1: Parse once and pass the parsed value through `c.set()`
+
+If middleware needs to inspect the JSON body and the route handler also needs the parsed object, parse it once in middleware and store the parsed data on the context.
+
+Hono `Context` supports `c.set()` and `c.get()` for request-scoped data.
+
+```ts
+import { Hono } from 'hono'
+
+type Variables = {
+  body: { name: string; email: string }
+}
+
+const app = new Hono<{ Variables: Variables }>()
+
+app.use('/api/*', async (c, next) => {
+  const body = await c.req.json<{ name: string; email: string }>()
+  c.set('body', body)
+  await next()
+})
+
+app.post('/api/users', async (c) => {
+  const body = c.get('body')
+  return c.json({ ok: true, user: body })
+})
+
+export default app
+```
+
+This works because the body is consumed exactly once. The middleware owns parsing, and the handler reuses the parsed object from context.
+
+Use this pattern when middleware must validate, authenticate, or enrich request data before the handler runs.
+
+### When to prefer this pattern
+
+Use `c.set()` when:
+
+- multiple middleware layers need access to the parsed body,
+- you want validation to happen before route logic,
+- the handler should not care about transport details.
+
+This keeps the request stream consumption centralized.
+
+## Fix 2: Reorder middleware so the route handler owns the body read
+
+If middleware does not actually need the body, move it earlier or make it skip body parsing entirely. Logging, CORS, timing, and auth middleware usually do not need to read the request payload.
+
+```ts
+import { Hono } from 'hono'
+
+const app = new Hono()
+
+app.use('/api/*', async (c, next) => {
+  console.log(`${c.req.method} ${c.req.path}`)
+  await next()
+})
+
+app.post('/api/users', async (c) => {
+  const data = await c.req.json<{ name: string }>()
+  return c.json({ ok: true, data })
+})
+
+export default app
+```
+
+In this version, middleware does not touch the body, so the handler can safely parse it.
+
+If a middleware currently reads the body only to decide whether a request should proceed, consider whether the same check can be done using headers, method, or path instead. Those values are available without consuming the body.
+
+## Fix 3: Clone the request before reading, if you truly need two independent reads
+
+If two separate layers must independently read the body, the request can be cloned before either read occurs.
+
+```ts
+import { Hono } from 'hono'
+
+const app = new Hono()
+
+app.use('/api/*', async (c, next) => {
+  const cloned = c.req.raw.clone()
+  const body = await cloned.text()
+  console.log('logged body:', body)
+  await next()
+})
+
+app.post('/api/users', async (c) => {
+  const data = await c.req.json()
+  return c.json({ ok: true, data })
+})
+
+export default app
+```
+
+This works because `Request.clone()` creates a second body stream. The middleware reads the clone, not the original.
+
+This approach has trade-offs:
+
+- it buffers the body twice,
+- it increases memory usage for large payloads,
+- it still requires discipline about which layer reads which stream.
+
+For small JSON payloads, cloning can be acceptable. For large uploads or high-throughput routes, it is usually better to parse once and share the parsed result with `c.set()`.
+
+## Common mistakes
+
+### Reading the body in a global middleware
+
+A global middleware like `app.use('*', ...)` that reads `c.req.text()` affects every route, including routes that expect to parse JSON later.
+
+```ts
+app.use('*', async (c, next) => {
+  await c.req.text()
+  await next()
+})
+```
+
+This is a frequent source of empty-body failures because it is easy to forget that all later handlers see the same request.
+
+If the middleware exists for logging, remove the body read. If it exists for validation, move the validation into a middleware that also stores the parsed value.
+
+### Mixing `req.text()` and `req.json()`
+
+A body can only be read once, even if different methods are used.
+
+```ts
+app.use('/api/*', async (c, next) => {
+  const raw = await c.req.text()
+  console.log(raw)
+  await next()
+})
+
+app.post('/api/users', async (c) => {
+  const json = await c.req.json()
+  return c.json(json)
+})
+```
+
+The first method call consumes the stream. The second call fails.
+
+### Reading the body for logging after validation
+
+Once validation middleware has consumed the body, later logging middleware cannot inspect it unless it logs the already-parsed value or works on a clone.
+
+Middleware ordering matters. Hono executes middleware in registration order for matching routes, so a later middleware cannot assume the body still exists if an earlier one has already read it.
+
+## Validation example with shared parsed data
+
+A practical pattern is to validate JSON in middleware and reuse the validated object in the route handler.
+
+```ts
+import { Hono } from 'hono'
+import { z } from 'zod'
+
+const UserSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+})
+
+type Variables = {
+  user: z.infer<typeof UserSchema>
+}
+
+const app = new Hono<{ Variables: Variables }>()
+
+app.use('/api/users', async (c, next) => {
+  const body = await c.req.json()
+  const parsed = UserSchema.parse(body)
+  c.set('user', parsed)
+  await next()
+})
+
+app.post('/api/users', async (c) => {
+  const user = c.get('user')
+  return c.json({ created: true, user }, 201)
+})
+
+export default app
+```
+
+This pattern keeps the handler simple. It also avoids parsing the same stream twice.
+
+## How to debug the issue
+
+If a JSON route fails with an empty-body parse error, inspect every middleware registered on the same path prefix.
+
+Check for these calls:
+
+- `c.req.json()`
+- `c.req.text()`
+- `c.req.arrayBuffer()`
+- `c.req.formData()`
+
+Also check shared utilities called from middleware. The body may be consumed indirectly inside helper functions.
+
+A quick way to confirm the cause is to log before and after each middleware, then compare which layer reads the body first.
+
+```ts
+app.use('/api/*', async (c, next) => {
+  console.log('middleware 1 start')
+  await next()
+  console.log('middleware 1 end')
+})
+```
+
+If a route starts failing after adding a middleware, search that middleware for any request-body read. The bug is usually there.
+
+## Runtime notes
+
+The issue is the same across Hono runtimes because it follows Fetch semantics.
+
+That includes:
+
+- Node.js using `fetch` support,
+- Cloudflare Workers,
+- Bun,
+- Deno,
+- Vercel Edge,
+- other edge runtimes that implement the Fetch API.
+
+The exact error string may vary slightly, but the underlying constraint does not.
+
+## Practical takeaway
+
+Prefer parsing the body once in the earliest layer that truly needs it, then pass the parsed result through `c.set()`. That keeps request-body ownership explicit and prevents later handlers from trying to read an exhausted stream.
+
+If middleware does not need the body, do not read it. If multiple layers must inspect it, clone the request before reading, but use that sparingly because it adds buffering overhead.
+
+To keep the problem from coming back, treat `c.req.json()`, `c.req.text()`, and similar methods as destructive reads. Only one layer should own the original body stream.
