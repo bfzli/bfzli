@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-08T23:15:24.453Z",
     "ideas": [
         {
-            "cell": "hono-request-body-parse-order::hono::json-middleware-order",
-            "title": "Hono Rejects a JSON Request When Middleware Reads the Body Before the Route Handler",
-            "description": "The handler cannot parse JSON because an earlier middleware consumed the request body first.",
-            "tags": [
-                "hono",
-                "middleware",
-                "json",
-                "request-body"
-            ],
-            "angle": "Open with the parse failure and the request path that triggers it. Explain that the Fetch request body is a one-shot stream, so any middleware that calls `req.text()`, `req.json()`, or similar exhausts it before the handler runs. Show how to parse once, pass the parsed data through `c.set()`, or reorder middleware so the route handler owns the body read.",
-            "slug": "hono-rejects-a-json-request-when-middleware-reads-the-body-before-the-route-handler"
-        },
-        {
             "cell": "nextjs-client-component-server-import::nextjs::app-router-boundary",
             "title": "Next.js Throws a Build Error When a Client Component Imports a Server-Only Module",
             "description": "The App Router build fails because a `'use client'` file pulls server-only code into the client bundle.",
@@ -56,18 +43,18 @@
     ],
     "drafted": [
         {
-            "cell": "astro-endpoint-method-handler::astro::missing-http-method",
-            "title": "Astro Returns 405 When an Endpoint Does Not Export the Right HTTP Method",
-            "description": "A request reaches an Astro endpoint, but the response is 405 because the file does not export the matching method handler.",
+            "cell": "hono-request-body-parse-order::hono::json-middleware-order",
+            "title": "Hono Rejects a JSON Request When Middleware Reads the Body Before the Route Handler",
+            "description": "The handler cannot parse JSON because an earlier middleware consumed the request body first.",
             "tags": [
-                "astro",
-                "api",
-                "http",
-                "endpoints"
+                "hono",
+                "middleware",
+                "json",
+                "request-body"
             ],
-            "angle": "Begin with the 405 response and the request method that fails. Explain how Astro endpoint files map exported functions like `GET` and `POST` to HTTP verbs, and why a default export or the wrong filename pattern leaves no handler for the request. Show how to export the exact method function, confirm the route path, and return the proper status code and body.",
-            "slug": "astro-returns-405-when-an-endpoint-does-not-export-the-right-http-method",
-            "draftedAt": "2026-11-12T02:37:36.131Z"
+            "angle": "Open with the parse failure and the request path that triggers it. Explain that the Fetch request body is a one-shot stream, so any middleware that calls `req.text()`, `req.json()`, or similar exhausts it before the handler runs. Show how to parse once, pass the parsed data through `c.set()`, or reorder middleware so the route handler owns the body read.",
+            "slug": "hono-rejects-a-json-request-when-middleware-reads-the-body-before-the-route-handler",
+            "draftedAt": "2026-11-13T02:18:35.287Z"
         }
     ]
 }
