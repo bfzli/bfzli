@@ -1,0 +1,383 @@
+---
+title: "Next.js Throws a Build Error When a Client Component Imports a Server-Only Module"
+description: "The App Router build fails because a `'use client'` file pulls server-only code into the client bundle."
+tags: ["nextjs", "react-server-components", "build", "client-component"]
+date: Nov 14, 2026
+cell: "nextjs-client-component-server-import::nextjs::app-router-boundary"
+---
+
+A Next.js App Router build fails when a `use client` file imports a server-only module. The build output typically includes an error like:
+
+```text
+Error: You're importing a component that needs "next/headers". That only works in a Server Component which is not allowed in the "app" directory. Read more: https://nextjs.org/docs/getting-started/react-essentials#the-server-component-and-client-component-boundaries
+```
+
+The failing import chain often looks like this:
+
+- `app/page.tsx` imports `components/Search.tsx`
+- `components/Search.tsx` starts with `'use client'`
+- `components/Search.tsx` imports `lib/session.ts`
+- `lib/session.ts` imports `cookies` from `next/headers`
+
+The build stops because `next/headers` is server-only, and the client bundle cannot include it.
+
+## What the error means
+
+Next.js App Router builds two module graphs:
+
+- a server graph for Server Components and server-only code
+- a client graph for Client Components and browser-executed code
+
+A file marked with `'use client'` becomes part of the client graph. Every module imported by that file must also be safe for the browser. That means no Node.js-only APIs, no private environment variables meant to stay on the server, and no `next/headers`, `next/cache`, or other server-only entry points.
+
+When a client file imports a server-only module, Next.js detects that the dependency chain would force server code into the browser bundle. The build fails instead of producing a broken client bundle.
+
+The error may vary depending on the exact import. Common variants include:
+
+```text
+You're importing a component that needs "next/headers". That only works in a Server Component...
+```
+
+```text
+Module not found: Can't resolve 'fs'
+```
+
+```text
+You're importing a module that uses Node.js APIs in a Client Component.
+```
+
+The root cause is the same: a client boundary pulled in code that cannot run in the browser.
+
+## Why server-only modules cannot be bundled for the browser
+
+Server-only modules often depend on capabilities that do not exist in browser JavaScript.
+
+Examples include:
+
+- `fs` for file system access
+- `path` for path manipulation in a Node.js environment
+- `crypto` server APIs
+- `next/headers` for request cookies and headers
+- `process.env.SECRET_KEY` for private configuration
+- database clients such as `pg`, `mysql2`, `mongodb`, or `prisma` runtime code
+
+A browser bundle cannot safely include these modules for two reasons.
+
+First, the APIs may not exist. `fs` cannot read a server file from a tab in the browser. `next/headers` only works while Next.js is rendering a request on the server.
+
+Second, the code may expose secrets or internal data. If a server-only module reads `process.env.API_KEY`, bundling that module for the browser would either fail or leak implementation details into client code. Next.js prevents that by drawing a hard boundary at `'use client'`.
+
+## How the import chain crosses the boundary
+
+A `use client` component does not need to import the server-only module directly to trigger the error. Any transitive dependency is enough.
+
+For example:
+
+```tsx
+// app/page.tsx
+import Search from './components/Search';
+
+export default function Page() {
+  return <Search />;
+}
+```
+
+```tsx
+// app/components/Search.tsx
+'use client';
+
+import { getUserSession } from '../lib/session';
+
+export default function Search() {
+  return <input aria-label="search" />;
+}
+```
+
+```ts
+// app/lib/session.ts
+import { cookies } from 'next/headers';
+
+export function getUserSession() {
+  return cookies().get('session')?.value ?? null;
+}
+```
+
+This fails because `Search.tsx` is client code, and `getUserSession()` depends on `next/headers`.
+
+The client boundary applies to the whole reachable import graph, not just the top-level file. That is why a seemingly harmless UI component can fail the build if one imported helper reaches into server-only APIs.
+
+## How App Router splits the graph
+
+In the App Router, files are Server Components by default. A file becomes a Client Component only when it has the `'use client'` directive at the top.
+
+That directive changes compilation behavior:
+
+- the file and its imports are treated as client code
+- props passed into the component must be serializable across the server-to-client boundary
+- server-only modules are disallowed in the import tree under that file
+
+This matters because a Server Component can import both server-only and client-capable modules, but a Client Component cannot import server-only code. Server Components can act as a bridge. Client Components cannot.
+
+That difference is the key to fixing the problem.
+
+## Fix 1: Move the server-only import behind a Server Component
+
+The cleanest fix is to keep server-only logic in a Server Component and pass plain data down to the Client Component.
+
+### Before: client component imports server-only code
+
+```tsx
+// app/components/Search.tsx
+'use client';
+
+import { getUserSession } from '../lib/session';
+
+export default function Search() {
+  const session = getUserSession();
+  return <input aria-label="search" defaultValue={session ?? ''} />;
+}
+```
+
+```ts
+// app/lib/session.ts
+import { cookies } from 'next/headers';
+
+export function getUserSession() {
+  return cookies().get('session')?.value ?? null;
+}
+```
+
+### After: server component reads the session and passes a prop
+
+```tsx
+// app/components/Search.tsx
+'use client';
+
+type SearchProps = {
+  initialSession: string | null;
+};
+
+export default function Search({ initialSession }: SearchProps) {
+  return <input aria-label="search" defaultValue={initialSession ?? ''} />;
+}
+```
+
+```tsx
+// app/page.tsx
+import Search from './components/Search';
+import { getUserSession } from './lib/session';
+
+export default function Page() {
+  const session = getUserSession();
+  return <Search initialSession={session} />;
+}
+```
+
+```ts
+// app/lib/session.ts
+import { cookies } from 'next/headers';
+
+export function getUserSession() {
+  return cookies().get('session')?.value ?? null;
+}
+```
+
+Here, `getUserSession()` stays on the server. `Search` receives a serializable `string | null` prop, which is safe to send to the browser.
+
+This is the preferred pattern when the client component only needs derived data, not direct access to the server API.
+
+## Fix 2: Split the component so only the interactive part is client-side
+
+Sometimes the client file imports server-only code because the component does too much. In that case, split the component into a server wrapper and a client leaf.
+
+### Server wrapper
+
+```tsx
+// app/components/SearchShell.tsx
+import SearchInput from './SearchInput';
+import { getUserSession } from '../lib/session';
+
+export default function SearchShell() {
+  const session = getUserSession();
+
+  return <SearchInput initialSession={session} />;
+}
+```
+
+### Client leaf
+
+```tsx
+// app/components/SearchInput.tsx
+'use client';
+
+type SearchInputProps = {
+  initialSession: string | null;
+};
+
+export default function SearchInput({ initialSession }: SearchInputProps) {
+  return <input aria-label="search" defaultValue={initialSession ?? ''} />;
+}
+```
+
+### Page usage
+
+```tsx
+// app/page.tsx
+import SearchShell from './components/SearchShell';
+
+export default function Page() {
+  return <SearchShell />;
+}
+```
+
+This keeps the server call in a server file and limits the client component to UI and event handling.
+
+Use this when the component needs both server-derived data and browser interactivity.
+
+## Fix 3: Replace the module with a browser-safe alternative
+
+Some imports should not cross the boundary at all. If the goal is to use a utility in both environments, choose an implementation that works in the browser.
+
+### Example: avoid `fs`
+
+```ts
+// app/lib/readConfig.ts
+import 'server-only';
+import fs from 'fs';
+
+export function readConfig() {
+  return fs.readFileSync('/etc/app/config.json', 'utf8');
+}
+```
+
+This is server-only by design. If a client component imports it, the build should fail.
+
+If the client needs configuration data, fetch it from a server endpoint or pass it as a prop from a Server Component.
+
+### Example: use a browser-safe utility instead of `node:path`
+
+If a function only needs URL-safe path handling in the browser, use standard web APIs or a package that supports both runtimes. For example, prefer `URL`, `URLSearchParams`, or a browser-compatible helper over `path.join()`.
+
+```ts
+export function buildSearchUrl(base: string, query: string) {
+  const url = new URL(base);
+  url.searchParams.set('q', query);
+  return url.toString();
+}
+```
+
+This can run in both environments without pulling in Node.js-only modules.
+
+## How to identify the bad import
+
+When the build fails, inspect the dependency chain from the client file upward.
+
+A practical checklist:
+
+1. Find the file with `'use client'`.
+2. List everything it imports directly.
+3. Follow each imported module recursively.
+4. Look for `next/headers`, `next/navigation` server-only usage, `fs`, `path`, database clients, or private environment access.
+5. Move that logic out of the client graph.
+
+You can also search the codebase for imports from the offending package:
+
+```bash
+grep -R "next/headers" app components lib
+grep -R "from 'fs'" app components lib
+grep -R "process.env" app components lib
+```
+
+If the package is a shared utility, check whether it is accidentally mixing browser-safe code with server-only code. A shared file that imports `cookies` or `fs` cannot be reused from a Client Component.
+
+## Common false assumptions
+
+A file being “just a helper” does not make it client-safe.
+
+This fails:
+
+```ts
+// app/lib/auth.ts
+import { cookies } from 'next/headers';
+
+export function getToken() {
+  return cookies().get('token')?.value;
+}
+```
+
+```tsx
+// app/components/Nav.tsx
+'use client';
+
+import { getToken } from '../lib/auth';
+
+export function Nav() {
+  return <nav />;
+}
+```
+
+Even if `Nav` never calls `getToken()`, the import is enough to make the client bundle depend on the server-only module.
+
+Another false assumption is that `dynamic(() => import(...))` automatically solves the problem. It does not, if the imported module still sits under a client boundary and still pulls in server-only code. Dynamic import changes loading behavior, not runtime capability.
+
+## A minimal safe pattern
+
+When the browser needs data, use this shape:
+
+- Server Component reads request data, files, secrets, or database content
+- Server Component passes plain JSON-serializable props to Client Component
+- Client Component handles interaction only
+
+Example:
+
+```tsx
+// app/page.tsx
+import ProfileEditor from './components/ProfileEditor';
+import { getProfile } from './lib/profile';
+
+export default async function Page() {
+  const profile = await getProfile();
+  return <ProfileEditor profile={profile} />;
+}
+```
+
+```tsx
+// app/components/ProfileEditor.tsx
+'use client';
+
+type Profile = {
+  displayName: string;
+  email: string;
+};
+
+type ProfileEditorProps = {
+  profile: Profile;
+};
+
+export default function ProfileEditor({ profile }: ProfileEditorProps) {
+  return (
+    <form>
+      <input defaultValue={profile.displayName} />
+      <input defaultValue={profile.email} />
+    </form>
+  );
+}
+```
+
+```ts
+// app/lib/profile.ts
+import 'server-only';
+
+export async function getProfile() {
+  return {
+    displayName: 'Ada Lovelace',
+    email: 'ada@example.com',
+  };
+}
+```
+
+The `server-only` package makes the intent explicit. If `app/lib/profile.ts` is imported from a client file, Next.js will fail the build immediately.
+
+## Practical takeaway
+
+Prefer moving server-only work behind a Server Component and passing serializable props into the `use client` boundary. That preserves the App Router split, keeps Node.js APIs and secrets on the server, and makes the client bundle browser-safe. If a module must be used in the browser, replace it with a runtime-compatible alternative instead of sharing a server-only helper across the boundary.
