@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-08T23:15:24.453Z",
     "ideas": [
         {
-            "cell": "nextjs-client-component-server-import::nextjs::app-router-boundary",
-            "title": "Next.js Throws a Build Error When a Client Component Imports a Server-Only Module",
-            "description": "The App Router build fails because a `'use client'` file pulls server-only code into the client bundle.",
-            "tags": [
-                "nextjs",
-                "react-server-components",
-                "build",
-                "client-component"
-            ],
-            "angle": "Start with the exact build error and the import chain that leads into the client component. Explain how the App Router splits server and client graphs, why server-only modules can include Node APIs or private data that cannot be bundled for the browser, and how a client boundary changes what can be imported. Show the fix by moving the import behind a server component, using a prop boundary, or replacing the module with a browser-safe alternative.",
-            "slug": "next-js-throws-a-build-error-when-a-client-component-imports-a-server-only-module"
-        },
-        {
             "cell": "dockerfile-copy-absence::docker::missing-source-path",
             "title": "Docker Build Fails with COPY: No Such File or Directory When the Context Does Not Include the File",
             "description": "`docker build` stops at `COPY` because the source path is outside the build context or excluded by `.dockerignore`.",
@@ -43,18 +30,18 @@
     ],
     "drafted": [
         {
-            "cell": "hono-request-body-parse-order::hono::json-middleware-order",
-            "title": "Hono Rejects a JSON Request When Middleware Reads the Body Before the Route Handler",
-            "description": "The handler cannot parse JSON because an earlier middleware consumed the request body first.",
+            "cell": "nextjs-client-component-server-import::nextjs::app-router-boundary",
+            "title": "Next.js Throws a Build Error When a Client Component Imports a Server-Only Module",
+            "description": "The App Router build fails because a `'use client'` file pulls server-only code into the client bundle.",
             "tags": [
-                "hono",
-                "middleware",
-                "json",
-                "request-body"
+                "nextjs",
+                "react-server-components",
+                "build",
+                "client-component"
             ],
-            "angle": "Open with the parse failure and the request path that triggers it. Explain that the Fetch request body is a one-shot stream, so any middleware that calls `req.text()`, `req.json()`, or similar exhausts it before the handler runs. Show how to parse once, pass the parsed data through `c.set()`, or reorder middleware so the route handler owns the body read.",
-            "slug": "hono-rejects-a-json-request-when-middleware-reads-the-body-before-the-route-handler",
-            "draftedAt": "2026-11-13T02:18:35.287Z"
+            "angle": "Start with the exact build error and the import chain that leads into the client component. Explain how the App Router splits server and client graphs, why server-only modules can include Node APIs or private data that cannot be bundled for the browser, and how a client boundary changes what can be imported. Show the fix by moving the import behind a server component, using a prop boundary, or replacing the module with a browser-safe alternative.",
+            "slug": "next-js-throws-a-build-error-when-a-client-component-imports-a-server-only-module",
+            "draftedAt": "2026-11-14T01:55:21.597Z"
         }
     ]
 }
