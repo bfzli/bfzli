@@ -1,0 +1,326 @@
+---
+title: "Docker Build Fails with COPY: No Such File or Directory When the Context Does Not Include the File"
+description: "`docker build` stops at `COPY` because the source path is outside the build context or excluded by `.dockerignore`."
+tags: ["docker", "build", "dockerfile", "context"]
+date: Nov 15, 2026
+cell: "dockerfile-copy-absence::docker::missing-source-path"
+---
+
+`docker build` fails at `COPY` with `COPY failed: stat /var/lib/docker/tmp/docker-builder...: no such file or directory` because the source path is not in the build context or was excluded by `.dockerignore`.
+
+## What the error means
+
+Docker does not read arbitrary files from the host filesystem during a build. It only sees the build context you send with `docker build`, and `COPY` can only reference files inside that context.
+
+A typical failure looks like this:
+
+```text
+Step 4/8 : COPY package.json /app/package.json
+COPY failed: stat /var/lib/docker/tmp/docker-builder123456789/package.json: no such file or directory
+```
+
+The path in the error is not the path on your machine. It is the temporary directory Docker created for the build context. If `package.json` is missing there, one of three things is true:
+
+- the file is outside the build context
+- the `COPY` source path is wrong relative to the `Dockerfile`
+- `.dockerignore` removed it from the context archive
+
+The key point is that `COPY` does not access your local filesystem directly. It copies only from the files Docker received when the build started.
+
+## How the build context works
+
+When you run `docker build`, Docker packages the build context directory into an archive and sends it to the builder. The last argument to `docker build` is the context root.
+
+```sh
+docker build -t webapp .
+```
+
+In that command, `.` is the build context. Docker includes files under the current directory, subject to `.dockerignore`.
+
+Inside the `Dockerfile`, `COPY` source paths are resolved relative to the context root, not relative to the `Dockerfile` location, unless the `Dockerfile` is in the same directory and you are using that directory as the context.
+
+For example:
+
+```dockerfile
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY src ./src
+CMD ["npm", "start"]
+```
+
+This works only if both `package.json` and `src` are inside the context you passed to `docker build`.
+
+If your project layout is this:
+
+```text
+repo/
+  Dockerfile
+  app/
+    package.json
+    package-lock.json
+    src/
+```
+
+then this command fails if run from `repo` with the `Dockerfile` above:
+
+```sh
+docker build -t webapp .
+```
+
+because `COPY package.json` looks for `repo/package.json`, not `repo/app/package.json`.
+
+## Fix the build context first
+
+The most direct fix is to run the build from the directory that contains the files referenced by `COPY`.
+
+If the app lives under `repo/app`, build from there:
+
+```sh
+cd repo/app
+docker build -t webapp .
+```
+
+Or, if you want to keep running the command from the repository root, point Docker at the correct context directory:
+
+```sh
+docker build -t webapp -f app/Dockerfile app
+```
+
+That command uses `app` as the build context and `app/Dockerfile` as the file to execute. Now `COPY package.json` resolves to `app/package.json`.
+
+If the `Dockerfile` is at the repo root but the app files are under `app/`, you can also update the `COPY` paths:
+
+```dockerfile
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY app/package.json app/package-lock.json ./
+RUN npm ci
+
+COPY app/src ./src
+```
+
+That only works if the context is the repo root and the `app/` directory is included in it.
+
+## Why a file can exist locally and still be missing in the build
+
+A file can be present on disk and still not be available to `COPY` if `.dockerignore` excludes it. Docker applies `.dockerignore` before sending the context to the builder. Excluded files never reach the build stage.
+
+Example `.dockerignore`:
+
+```gitignore
+node_modules
+dist
+package-lock.json
+```
+
+With that file, `package-lock.json` exists in the working directory, but Docker removes it from the context archive. A `COPY package-lock.json ./` instruction then fails with the same `stat ... no such file or directory` error.
+
+This is the same mechanism as `.gitignore`, but the effect is different. `.gitignore` only affects Git. `.dockerignore` affects what Docker can see during build.
+
+A common source of confusion is a broad pattern such as:
+
+```gitignore
+*
+!src/
+!Dockerfile
+```
+
+That pattern ignores everything except `src/` and `Dockerfile`. If you later add `package.json` or a lockfile, it will not be in the context unless you explicitly unignore it.
+
+Docker’s ignore rules also support negation, but the order matters. A negated pattern only restores files that are still reachable by the directory traversal. If a parent directory is excluded, the file may still be unavailable unless the necessary parent paths are also included.
+
+## How to confirm the file is in the context
+
+If `COPY` fails, check both the path and the ignore rules.
+
+From the directory you want to use as context, list the file:
+
+```sh
+pwd
+ls -la
+ls -la app
+```
+
+Then inspect `.dockerignore`:
+
+```sh
+cat .dockerignore
+```
+
+If the file is excluded, remove the rule or add a negation. For example:
+
+```gitignore
+node_modules
+dist
+*.log
+!package.json
+!package-lock.json
+```
+
+If the file is inside a subdirectory, make sure the `COPY` instruction uses the correct path relative to the context root:
+
+```dockerfile
+COPY app/package.json app/package-lock.json ./
+```
+
+You can also check what Docker is sending by building with plain progress output:
+
+```sh
+docker build --no-cache --progress=plain -t webapp .
+```
+
+That does not print the full context archive, but it makes the step that fails easier to see. For BuildKit-enabled builds, the error still points to the missing file inside the temporary context.
+
+## Correcting `COPY` paths
+
+`COPY` source paths are context-relative. They are not shell paths, and they are not resolved from the `Dockerfile` directory.
+
+Valid examples:
+
+```dockerfile
+COPY package.json ./
+COPY src/ ./src/
+COPY app/package.json /app/package.json
+```
+
+Invalid when the context is the repo root and the file is under `app/`:
+
+```dockerfile
+COPY package.json ./
+```
+
+Invalid when the file is outside the context entirely:
+
+```dockerfile
+COPY ../shared/config.json /app/config.json
+```
+
+Docker rejects paths outside the context boundary because the builder never received those files. `..` does not escape the context. The file is not there to copy.
+
+If you need shared files from a parent directory, you have to choose a higher-level build context that includes them, or restructure the repository so the `Dockerfile` only needs files under one context root.
+
+## Changing the build context safely
+
+Sometimes the simplest correction is to move the context boundary, not the `Dockerfile`.
+
+Suppose the repository looks like this:
+
+```text
+repo/
+  Dockerfile
+  shared/
+    config.json
+  service/
+    package.json
+    src/
+```
+
+If the image needs both `service/` and `shared/config.json`, build from `repo` and refer to both paths explicitly:
+
+```dockerfile
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY service/package.json service/package-lock.json ./
+RUN npm ci
+
+COPY service/src ./src
+COPY shared/config.json ./config.json
+```
+
+Then run:
+
+```sh
+docker build -t service-image -f Dockerfile .
+```
+
+Here the context is `repo`, so both `service/` and `shared/` are visible.
+
+If you instead run:
+
+```sh
+docker build -t service-image -f service/Dockerfile service
+```
+
+then `shared/config.json` is outside the context and cannot be copied.
+
+The choice is architectural: the context should include exactly the files needed for the image and no more. That keeps builds reproducible and prevents accidental dependence on files outside the build input.
+
+## A minimal example
+
+A small example shows the failure mode clearly.
+
+Directory layout:
+
+```text
+demo/
+  Dockerfile
+  .dockerignore
+  app/
+    index.ts
+```
+
+`Dockerfile`:
+
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json ./
+```
+
+`docker build -t demo .` fails because `package.json` is not in `demo/`.
+
+Fix 1, correct the path:
+
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY app/package.json ./
+```
+
+Fix 2, change the context:
+
+```sh
+docker build -t demo -f app/Dockerfile app
+```
+
+Fix 3, if `.dockerignore` excludes it, remove the exclusion:
+
+```gitignore
+# .dockerignore
+node_modules
+dist
+```
+
+If `package.json` was listed there, it would need to be removed.
+
+## Common edge cases
+
+Relative paths in a monorepo often cause this error. A package may have its own `Dockerfile`, but the command is run from the repository root with the wrong context. The file exists, but not in the context Docker received.
+
+Another common case is copying generated files. If `COPY dist/ /app/dist/` fails, the `dist` directory may not have been built yet, or it may be ignored. The build context only includes files already present on disk at build time.
+
+Symlinks can also be confusing. Docker preserves files in the context, but a symlink pointing outside the context does not give `COPY` access to the target outside the boundary. The builder still only has the files that were sent.
+
+A final case is typos in the `Dockerfile` path itself. `COPY package-lock.json ./` and `COPY package-lock.json ./` look identical at a glance, but `package-lock.json` and `package-lock.json` are not the issue here. The real problem is usually context scope, not the `COPY` syntax.
+
+## Preferred fix order
+
+First, verify the file is inside the build context you are passing to `docker build`. Then check `.dockerignore`. Then correct the `COPY` source path if it is relative to the wrong directory.
+
+In practice, the safest approach is:
+
+1. run `docker build` from the directory that should define the context
+2. use `-f` only when the `Dockerfile` is elsewhere
+3. keep `COPY` paths relative to that context root
+4. exclude only generated or unnecessary files in `.dockerignore`
+
+That prevents `COPY failed: stat ... no such file or directory` from appearing when the file exists locally but was never part of the build input.
