@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-08T23:15:24.453Z",
     "ideas": [
         {
-            "cell": "dockerfile-copy-absence::docker::missing-source-path",
-            "title": "Docker Build Fails with COPY: No Such File or Directory When the Context Does Not Include the File",
-            "description": "`docker build` stops at `COPY` because the source path is outside the build context or excluded by `.dockerignore`.",
-            "tags": [
-                "docker",
-                "build",
-                "dockerfile",
-                "context"
-            ],
-            "angle": "Open with the exact `COPY` error and the source path named by Docker. Explain the build context boundary, how Docker can only copy files sent in the context archive, and why `.dockerignore` can remove a file even when it exists locally. Show how to run the build from the correct directory, fix the `COPY` path, or change the context and ignore rules.",
-            "slug": "docker-build-fails-with-copy-no-such-file-or-directory-when-the-context-does-not-include-the-file"
-        },
-        {
             "cell": "nginx-proxy-pass-trailing-slash::nginx::upstream-path-rewrite",
             "title": "Nginx Proxies the Wrong Upstream URL When `proxy_pass` Uses the Wrong Trailing Slash",
             "description": "Requests reach the upstream app with an unexpected path because `proxy_pass` rewrites the URI differently than intended.",
@@ -30,18 +17,18 @@
     ],
     "drafted": [
         {
-            "cell": "nextjs-client-component-server-import::nextjs::app-router-boundary",
-            "title": "Next.js Throws a Build Error When a Client Component Imports a Server-Only Module",
-            "description": "The App Router build fails because a `'use client'` file pulls server-only code into the client bundle.",
+            "cell": "dockerfile-copy-absence::docker::missing-source-path",
+            "title": "Docker Build Fails with COPY: No Such File or Directory When the Context Does Not Include the File",
+            "description": "`docker build` stops at `COPY` because the source path is outside the build context or excluded by `.dockerignore`.",
             "tags": [
-                "nextjs",
-                "react-server-components",
+                "docker",
                 "build",
-                "client-component"
+                "dockerfile",
+                "context"
             ],
-            "angle": "Start with the exact build error and the import chain that leads into the client component. Explain how the App Router splits server and client graphs, why server-only modules can include Node APIs or private data that cannot be bundled for the browser, and how a client boundary changes what can be imported. Show the fix by moving the import behind a server component, using a prop boundary, or replacing the module with a browser-safe alternative.",
-            "slug": "next-js-throws-a-build-error-when-a-client-component-imports-a-server-only-module",
-            "draftedAt": "2026-11-14T01:55:21.597Z"
+            "angle": "Open with the exact `COPY` error and the source path named by Docker. Explain the build context boundary, how Docker can only copy files sent in the context archive, and why `.dockerignore` can remove a file even when it exists locally. Show how to run the build from the correct directory, fix the `COPY` path, or change the context and ignore rules.",
+            "slug": "docker-build-fails-with-copy-no-such-file-or-directory-when-the-context-does-not-include-the-file",
+            "draftedAt": "2026-11-15T01:27:21.829Z"
         }
     ]
 }
