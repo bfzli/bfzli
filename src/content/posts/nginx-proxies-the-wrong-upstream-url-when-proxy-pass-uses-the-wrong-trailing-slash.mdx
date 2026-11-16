@@ -1,0 +1,321 @@
+---
+title: "Nginx Proxies the Wrong Upstream URL When `proxy_pass` Uses the Wrong Trailing Slash"
+description: "Requests reach the upstream app with an unexpected path because `proxy_pass` rewrites the URI differently than intended."
+tags: ["nginx", "reverse-proxy", "proxy-pass", "routing"]
+date: Nov 16, 2026
+cell: "nginx-proxy-pass-trailing-slash::nginx::upstream-path-rewrite"
+---
+
+Requests to `/api/users` are reaching the backend as `/users`, and the backend returns `404 Not Found`.
+
+## What Nginx is rewriting
+
+`proxy_pass` does two different things depending on whether the upstream URL ends with a trailing slash.
+
+With a location prefix such as `location /api/`, Nginx first matches the request URI against that prefix. Then it decides how to build the upstream URI.
+
+The rule is:
+
+- `proxy_pass http://upstream;` keeps the URI after the location prefix and appends it to the upstream host as-is.
+- `proxy_pass http://upstream/;` replaces the matched location prefix with `/` and then appends the rest of the URI.
+
+That difference is easy to miss because the syntax looks nearly identical. The trailing slash changes how path joining works.
+
+A request for `/api/users?id=1` can become one of several different upstream requests depending on the location and `proxy_pass` form.
+
+## The mechanism behind the path rewrite
+
+Consider this configuration:
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    location /api/ {
+        proxy_pass http://backend/;
+    }
+}
+```
+
+For a request to `/api/users`, Nginx matches `location /api/`.
+
+Because `proxy_pass` includes a URI part, here `/`, Nginx replaces the matching location prefix `/api/` with `/`. The result is `/users`.
+
+The backend receives:
+
+```text
+GET /users HTTP/1.1
+```
+
+If the backend expects `/api/users`, it will likely return `404 Not Found`.
+
+Now compare that with:
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    location /api/ {
+        proxy_pass http://backend;
+    }
+}
+```
+
+Here `proxy_pass` has no URI part. Nginx forwards the request URI with the location prefix preserved. The backend receives:
+
+```text
+GET /api/users HTTP/1.1
+```
+
+That distinction is the core problem. The trailing slash is not cosmetic. It changes the URI that the upstream sees.
+
+## How Nginx joins the URI
+
+The join behavior is easiest to understand by separating the request into two pieces:
+
+- the matched location prefix
+- the remainder of the request URI
+
+For `location /api/` and request `/api/users`, the pieces are:
+
+- matched prefix: `/api/`
+- remainder: `users`
+
+Then the two `proxy_pass` forms behave like this:
+
+- `proxy_pass http://backend;` sends `/api/users`
+- `proxy_pass http://backend/;` sends `/users`
+
+The same logic applies to deeper paths:
+
+Request:
+
+```text
+/api/v1/users/42
+```
+
+With `location /api/` and `proxy_pass http://backend/;`, the backend sees:
+
+```text
+/v1/users/42
+```
+
+With `proxy_pass http://backend;`, the backend sees:
+
+```text
+/api/v1/users/42
+```
+
+This is why a backend route can suddenly stop matching after a proxy change. The upstream application is not necessarily broken. It may simply be receiving a different path than before.
+
+## Preserving the original path
+
+If the backend already serves routes with the same prefix as the external path, omit the trailing slash in `proxy_pass`.
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    location /api/ {
+        proxy_pass http://backend;
+    }
+}
+```
+
+This preserves the URI after Nginx matches the location. It is the correct choice when the backend expects the external prefix to remain part of the request.
+
+A common example is a service mounted under `/api` on both the public edge and the internal app.
+
+If the backend is listening on `http://backend:3000` and expects `/api/users`, this is the simplest configuration.
+
+## Rewriting the prefix away
+
+If the backend expects paths without `/api`, include the trailing slash on the upstream URL.
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    location /api/ {
+        proxy_pass http://backend/;
+    }
+}
+```
+
+This configuration rewrites:
+
+- `/api/users` to `/users`
+- `/api/users/42` to `/users/42`
+
+Use this when `/api` is only an external routing prefix and the upstream app is mounted at the root path.
+
+That distinction matters for frameworks that generate self-referential URLs, redirects, or asset paths from the received request path. If the application is mounted at `/`, it will usually expect the rewritten form.
+
+## Avoiding accidental double slashes and missing prefixes
+
+The safest mental model is to keep the location prefix and upstream URI aligned deliberately.
+
+For example, this is a common pattern for a root-mounted backend behind `/api`:
+
+```nginx
+location /api/ {
+    proxy_pass http://backend/;
+}
+```
+
+Do not mix this with `location /api` unless you understand the difference in matching semantics.
+
+`location /api` matches both `/api` and `/apianything`, while `location /api/` matches the subtree under `/api/`. For proxying path prefixes, `location /api/` is usually the correct form because it avoids accidental matches.
+
+If you need `/api` without the trailing slash to redirect to `/api/`, add a separate redirect:
+
+```nginx
+location = /api {
+    return 301 /api/;
+}
+
+location /api/ {
+    proxy_pass http://backend/;
+}
+```
+
+This prevents ambiguity and keeps path handling consistent.
+
+## Confirming the final upstream URI
+
+You need to verify what the backend actually receives, not just what the client sent.
+
+A direct way is to log the proxied request URI in Nginx. Add a custom log format:
+
+```nginx
+log_format proxy_debug '$remote_addr - $request '
+                       'uri=$uri request_uri=$request_uri '
+                       'upstream=$upstream_addr '
+                       'status=$status upstream_status=$upstream_status';
+
+access_log /var/log/nginx/access.log proxy_debug;
+```
+
+Then reload Nginx:
+
+```sh
+nginx -t && nginx -s reload
+```
+
+Test with `curl`:
+
+```sh
+curl -i http://example.com/api/users
+```
+
+In the access log, inspect `$request_uri` and `$uri`. `$request_uri` preserves the original client URI, including the query string. `$uri` is the normalized internal URI after Nginx processing. To confirm the upstream path specifically, add the backend application’s own request logging or use a temporary echo server.
+
+For a fast upstream check, you can proxy to a small echo service such as `httpbin` or `traefik/whoami`. A local Docker example:
+
+```sh
+docker run --rm -p 8081:80 traefik/whoami
+```
+
+Then point Nginx to it:
+
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:8081/;
+}
+```
+
+A request to `/api/test` should show `/test` in the echo response. Change the config to `proxy_pass http://127.0.0.1:8081;` and the echoed path should become `/api/test`.
+
+That confirms the rewrite rule directly.
+
+## Example configurations that are correct
+
+If the backend expects `/api/...`, preserve the prefix:
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    location /api/ {
+        proxy_pass http://backend:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+If the backend expects `/...`, strip the prefix:
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    location /api/ {
+        proxy_pass http://backend:3000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+If you need to preserve the exact original request URI, including path and query string, and you want explicit control, use variables carefully. For most proxying setups, the two forms above are enough. Introducing variables into `proxy_pass` changes how Nginx handles URI replacement, so do not use them unless the configuration truly requires runtime URI construction.
+
+## Common failure modes
+
+A backend `404 Not Found` is the most common symptom, but not the only one.
+
+Other symptoms include:
+
+- redirects pointing to the wrong path
+- static assets loading from `/` instead of `/api/`
+- OpenAPI or Swagger docs generating incorrect callback URLs
+- auth middleware rejecting paths because the prefix changed
+- websocket endpoints failing when the proxy path no longer matches the upgrade route
+
+The root cause is still the same: the upstream sees a different URI from the one the application expects.
+
+If a backend uses route-based authorization or path-based middleware, the wrong rewrite can also trigger `403 Forbidden` or `401 Unauthorized` even when the route exists.
+
+## How to keep the configuration unambiguous
+
+Use one of these two patterns and stick to it consistently.
+
+Preserve the external prefix:
+
+```nginx
+location /api/ {
+    proxy_pass http://backend;
+}
+```
+
+Strip the external prefix:
+
+```nginx
+location /api/ {
+    proxy_pass http://backend/;
+}
+```
+
+Do not treat the trailing slash as a formatting preference. It is part of the routing logic.
+
+When reviewing or changing Nginx configs, verify three things together:
+
+1. the `location` prefix
+2. the `proxy_pass` URL, including its trailing slash
+3. the path the backend expects
+
+If those three do not line up, the upstream URI will not match what the application routes on.
+
+## Practical takeaway
+
+Prefer the configuration that makes the backend receive the path it was built for. If the application is mounted under the same prefix you expose publicly, omit the trailing slash in `proxy_pass`. If Nginx is only stripping an external prefix before forwarding to an app rooted at `/`, include the trailing slash.
+
+To prevent the problem from coming back, keep a test request in your deployment checks and verify the upstream path with logs or an echo endpoint after any Nginx change.
