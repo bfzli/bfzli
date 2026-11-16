@@ -1,6 +1,7 @@
 {
     "generatedAt": "2026-11-08T23:15:24.453Z",
-    "ideas": [
+    "ideas": [],
+    "drafted": [
         {
             "cell": "nginx-proxy-pass-trailing-slash::nginx::upstream-path-rewrite",
             "title": "Nginx Proxies the Wrong Upstream URL When `proxy_pass` Uses the Wrong Trailing Slash",
@@ -12,23 +13,8 @@
                 "routing"
             ],
             "angle": "Begin with the incorrect upstream path or 404 returned by the backend. Explain the URI rewrite rules around `proxy_pass`, especially the difference between including and omitting a trailing slash in the upstream URL, and how that changes path joining. Show the correct location block for preserving or rewriting the request path and how to confirm the final upstream URI.",
-            "slug": "nginx-proxies-the-wrong-upstream-url-when-proxy-pass-uses-the-wrong-trailing-slash"
-        }
-    ],
-    "drafted": [
-        {
-            "cell": "dockerfile-copy-absence::docker::missing-source-path",
-            "title": "Docker Build Fails with COPY: No Such File or Directory When the Context Does Not Include the File",
-            "description": "`docker build` stops at `COPY` because the source path is outside the build context or excluded by `.dockerignore`.",
-            "tags": [
-                "docker",
-                "build",
-                "dockerfile",
-                "context"
-            ],
-            "angle": "Open with the exact `COPY` error and the source path named by Docker. Explain the build context boundary, how Docker can only copy files sent in the context archive, and why `.dockerignore` can remove a file even when it exists locally. Show how to run the build from the correct directory, fix the `COPY` path, or change the context and ignore rules.",
-            "slug": "docker-build-fails-with-copy-no-such-file-or-directory-when-the-context-does-not-include-the-file",
-            "draftedAt": "2026-11-15T01:27:21.829Z"
+            "slug": "nginx-proxies-the-wrong-upstream-url-when-proxy-pass-uses-the-wrong-trailing-slash",
+            "draftedAt": "2026-11-16T01:29:56.976Z"
         }
     ]
 }
