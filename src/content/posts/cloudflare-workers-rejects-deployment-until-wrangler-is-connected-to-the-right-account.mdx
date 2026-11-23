@@ -1,0 +1,308 @@
+---
+title: "Cloudflare Workers Rejects Deployment Until `wrangler` Is Connected to the Right Account"
+description: "`wrangler deploy` fails or targets the wrong account when the local config is not linked to the intended Cloudflare account."
+tags: ["cloudflare-workers", "wrangler", "deployment", "authentication"]
+date: Nov 23, 2026
+cell: "cloudflare-account-linking::cloudflare-workers::wrangler-login-and-deploy"
+---
+
+`wrangler deploy` fails with `Error: You're not authorized to access this project` or deploys the Worker to the wrong Cloudflare account when the local project is linked to a different account than the one you intend to use.
+
+## What the error means
+
+`wrangler` makes two separate decisions before it uploads a Worker:
+
+1. Which Cloudflare account owns the project.
+2. Which Cloudflare credentials are allowed to deploy to that account.
+
+Those decisions are not the same thing.
+
+A Cloudflare account is the container that owns Workers, routes, KV namespaces, R2 buckets, and other resources. `wrangler` identifies the target account from project metadata in `wrangler.toml` and from the account that is associated with the currently authenticated user or API token. If those do not match, one of two things happens:
+
+- `wrangler deploy` is rejected with an authorization error.
+- The deployment succeeds, but it targets the wrong account because the local project metadata points there.
+
+The exact error text varies slightly by `wrangler` version, but the common forms are:
+
+```text
+Error: You're not authorized to access this project
+```
+
+```text
+Error: Authentication error [code: 10000]
+```
+
+```text
+X [ERROR] A request to the Cloudflare API failed
+```
+
+A wrong-account deployment usually shows up as a missing Worker in the expected account, or as a new Worker appearing in another account that the active credential can access.
+
+## How `wrangler` decides where to deploy
+
+`wrangler` combines three pieces of configuration:
+
+- The local `wrangler.toml` file.
+- The active login session stored by `wrangler login`.
+- Any API token provided through environment variables or CI secrets.
+
+A minimal `wrangler.toml` contains project metadata such as:
+
+```toml
+name = "my-worker"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+account_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+```
+
+The `account_id` value is the most important field here. It tells `wrangler` which Cloudflare account owns the project.
+
+If the file also uses environment-specific sections, the account can be overridden indirectly by selecting a different environment:
+
+```toml
+name = "my-worker"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+account_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[env.production]
+name = "my-worker-prod"
+account_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+```
+
+That means `wrangler deploy --env production` does not just change behavior. It changes the account and resource targets.
+
+The active credential matters too. `wrangler` can authenticate through the browser login flow or through an API token. The token or session must have permission for the target account and, in many cases, the target account must be the one bound to the project metadata.
+
+## Why the wrong account causes failures
+
+Cloudflare APIs do not treat account ownership as a cosmetic label. The account ID is part of the authorization and routing context for Worker deployment.
+
+When `wrangler` runs `deploy`, it performs API calls to the account specified by the project metadata. If the active identity does not have permission there, the API rejects the request. If the metadata itself points to the wrong account, the deployment can land in that account even if the code is otherwise valid.
+
+This is especially common when one local checkout was copied from another repository or when a developer logs into Cloudflare with a different email address than the one originally used to create the project.
+
+The important point is that `wrangler` is not inferring account ownership from the source code. It is reading the local configuration and credentials, then using the Cloudflare API to resolve the account. A stale `account_id` or stale login session is enough to send deployment traffic to the wrong place.
+
+## Check the current account before deploying
+
+Start by checking the project metadata that `wrangler` will use.
+
+```bash
+cat wrangler.toml
+```
+
+Look for `account_id` and any `env.*` sections.
+
+If you want to inspect the currently linked project state through `wrangler`, run:
+
+```bash
+npx wrangler whoami
+```
+
+Depending on the version, `whoami` prints the authenticated user or the API token context. That confirms which identity `wrangler` is using, but it does not guarantee that the local project is linked to the intended account.
+
+To see the effective project configuration, use:
+
+```bash
+npx wrangler deploy --dry-run
+```
+
+If your version supports it, `--dry-run` shows what `wrangler` intends to upload without making the final publish call. It is useful for checking whether the tool is targeting the expected project name and environment.
+
+For account verification at the API level, you can also use `wrangler` to list accessible accounts indirectly by checking the login context, or query the Cloudflare dashboard to confirm the account ID shown in the URL and settings. The key is to compare the `account_id` in `wrangler.toml` with the account that the current credential can actually access.
+
+## Re-link the project to the intended account
+
+If the project was linked to the wrong account, update the local project metadata. The exact command depends on the `wrangler` major version.
+
+For current `wrangler` releases, login first:
+
+```bash
+npx wrangler login
+```
+
+Then deploy once to let `wrangler` refresh metadata if needed:
+
+```bash
+npx wrangler deploy
+```
+
+If the project uses an outdated or incorrect `account_id`, edit `wrangler.toml` directly and replace it with the correct account ID.
+
+```toml
+name = "my-worker"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+account_id = "cccccccccccccccccccccccccccccccc"
+```
+
+If the project has environment-specific bindings, update those too.
+
+```toml
+[env.staging]
+account_id = "cccccccccccccccccccccccccccccccc"
+
+[env.production]
+account_id = "dddddddddddddddddddddddddddddddd"
+```
+
+Some older `wrangler` versions used a binding step or interactive prompts to connect the project. In those cases, the project can often be re-linked by removing stale local state and running the authentication flow again. The local state is usually stored in a `.wrangler/` directory or in cached credentials under the user profile. If the CLI keeps reusing the wrong account after login, clear the local `wrangler` session and re-authenticate.
+
+```bash
+rm -rf .wrangler
+npx wrangler logout
+npx wrangler login
+```
+
+Then deploy again.
+
+```bash
+npx wrangler deploy
+```
+
+## Use the right API token for the right account
+
+API tokens are often the real source of the mismatch. A token can authenticate successfully and still not be valid for the target account.
+
+A Cloudflare API token must have:
+
+- Access to the correct account.
+- Permission to edit Workers.
+- Any additional permissions required by bindings used in the project.
+
+A token for the wrong account can produce an authorization error even though the token itself is valid. A token with limited permissions can also cause partial failures during deploy, especially if the Worker config references KV namespaces, R2 buckets, D1 databases, or secrets in that account.
+
+If you are deploying in CI, the token should be provided explicitly:
+
+```bash
+export CLOUDFLARE_API_TOKEN="your_token_here"
+npx wrangler deploy
+```
+
+When a token is present, `wrangler` uses that token rather than a browser login session. That means a stale local login is not the main issue in CI. The token scope becomes the controlling factor.
+
+To verify token-based auth locally, you can unset any conflicting environment variables and log in again:
+
+```bash
+unset CLOUDFLARE_API_TOKEN
+unset CF_API_TOKEN
+npx wrangler login
+```
+
+Then confirm which identity is active:
+
+```bash
+npx wrangler whoami
+```
+
+If the output does not match the account owner expected for the project, the credential itself is wrong and needs to be replaced.
+
+## Why `wrangler.toml` metadata can send deployments to the wrong account
+
+The `account_id` field in `wrangler.toml` is not a hint. It is the target account selector.
+
+That becomes a problem when:
+
+- A repository is cloned from another project and the old `account_id` remains.
+- A shared template is copied without replacing the account ID.
+- The same codebase is used across staging and production accounts.
+- A branch changes `wrangler.toml` but the active login session still belongs to another account.
+
+The result is deterministic. `wrangler` will follow the metadata it sees, not the account you expected from the CLI login alone.
+
+For this reason, a repository can appear to be “logged in correctly” while still deploying to the wrong place. The local session authenticates you, but `wrangler.toml` decides where the deployment goes.
+
+## Verify the account before every sensitive deploy
+
+Use the following checks before deploying to a production account:
+
+```bash
+npx wrangler whoami
+grep -nE 'account_id|env\.' wrangler.toml
+```
+
+Then compare the `account_id` values against the Cloudflare dashboard or the account API output.
+
+If the project has multiple environments, make sure the environment flag matches the intended account:
+
+```bash
+npx wrangler deploy --env production
+```
+
+A deploy without `--env` uses the default section in `wrangler.toml`. A deploy with `--env` can switch to a different `account_id` and a different set of bindings. That switch is often where mistakes happen.
+
+If your project uses separate accounts for staging and production, keep the identifiers explicit and separate in the config file. Do not rely on whichever account happened to be active in the CLI session.
+
+## Common failure patterns
+
+A few patterns account for most of the failures:
+
+### 1. Cloned project with stale `account_id`
+
+The config still points at the original owner account. `wrangler` tries to deploy there, and the current credential cannot access it.
+
+Fix: replace `account_id` in `wrangler.toml` with the intended account ID.
+
+### 2. Browser login is for the wrong Cloudflare account
+
+The CLI login succeeds, but the active browser session belongs to another account.
+
+Fix: run `npx wrangler logout`, sign in again, then confirm with `npx wrangler whoami`.
+
+### 3. CI token lacks the target account
+
+The token is valid but scoped to a different account or lacks Worker edit permissions.
+
+Fix: generate a new token with the correct account and permission set, then update the secret used by CI.
+
+### 4. Environment-specific config points elsewhere
+
+`[env.production]` or another environment section has a different `account_id` than the default section.
+
+Fix: inspect the selected environment and update all relevant sections in `wrangler.toml`.
+
+### 5. Old local state is overriding expectations
+
+Cached local state can preserve an earlier link or identity.
+
+Fix: remove the `.wrangler/` directory, log out, and authenticate again.
+
+## A reliable re-link procedure
+
+If the deployment target is uncertain, use this sequence:
+
+```bash
+# 1. Inspect the config
+cat wrangler.toml
+
+# 2. Remove old local state
+rm -rf .wrangler
+
+# 3. Clear the active login
+npx wrangler logout
+
+# 4. Sign in again
+npx wrangler login
+
+# 5. Confirm the active identity
+npx wrangler whoami
+
+# 6. Deploy with the intended environment
+npx wrangler deploy --env production
+```
+
+If the deployment still targets the wrong account after that, the remaining issue is almost always the `account_id` in `wrangler.toml` or the API token used by the environment.
+
+## Prefer explicit account configuration
+
+The safest fix is to keep `account_id` explicit in `wrangler.toml`, keep environment sections separate, and use a token or login session that belongs to the same account. That reduces ambiguity and makes account targeting visible in version control.
+
+For production deployments, prefer:
+
+- A dedicated API token for the production account.
+- Explicit `account_id` values in `wrangler.toml`.
+- `npx wrangler whoami` before deploy.
+- `--env production` only when the environment section is reviewed and correct.
+
+That combination prevents `wrangler` from guessing, which is exactly what avoids deployments failing or landing in the wrong Cloudflare account.
