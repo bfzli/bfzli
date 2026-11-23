@@ -1,6 +1,124 @@
 {
-    "generatedAt": "2026-11-08T23:15:24.453Z",
-    "ideas": [],
+    "generatedAt": "2026-11-23T00:31:20.229Z",
+    "ideas": [
+        {
+            "cell": "cloudflare-account-linking::cloudflare-workers::wrangler-login-and-deploy",
+            "title": "Cloudflare Workers Rejects Deployment Until `wrangler` Is Connected to the Right Account",
+            "description": "`wrangler deploy` fails or targets the wrong account when the local config is not linked to the intended Cloudflare account.",
+            "tags": [
+                "cloudflare-workers",
+                "wrangler",
+                "deployment",
+                "authentication"
+            ],
+            "angle": "Open with the exact `wrangler` error and the account-targeting symptom. Explain how account selection, API tokens, and `wrangler.toml` project metadata interact, and why a misbound login or token causes deployment to fail or land in the wrong place. Show the commands to re-link the project and verify the active account before deploying.",
+            "slug": "cloudflare-workers-rejects-deployment-until-wrangler-is-connected-to-the-right-account"
+        },
+        {
+            "cell": "electron-context-isolation-preload-bridge::electron::renderer-missing-api",
+            "title": "Electron Renderer Sees `window.api` as Undefined After a Preload Bridge Is Not Exposed",
+            "description": "The renderer cannot call exposed IPC helpers because the preload script never attaches them to the isolated page.",
+            "tags": [
+                "electron",
+                "preload",
+                "context-isolation",
+                "ipc"
+            ],
+            "angle": "Start with the renderer-side `undefined` symptom and the exact access site. Explain how `contextIsolation`, `preload`, and `contextBridge.exposeInMainWorld()` work together, and why assigning to `window` directly fails under isolation. Show the correct preload export and how the renderer should consume it.",
+            "slug": "electron-renderer-sees-window-api-as-undefined-after-a-preload-bridge-is-not-exposed"
+        },
+        {
+            "cell": "hono-json-body-before-validation::hono::middleware-consumes-request-body",
+            "title": "Hono Rejects JSON Validation Because Middleware Reads `c.req.json()` First",
+            "description": "The route cannot parse the body again after middleware consumes the request stream before validation runs.",
+            "tags": [
+                "hono",
+                "middleware",
+                "json",
+                "validation"
+            ],
+            "angle": "Open with the body-parse failure and the route that stops working. Explain why Request bodies are one-shot streams in the Fetch API, how Hono middleware ordering affects `c.req.json()`, and why validation sees an empty or consumed body. Show how to move parsing, clone the request, or centralize parsing so the handler still receives the payload.",
+            "slug": "hono-rejects-json-validation-because-middleware-reads-c-req-json-first"
+        },
+        {
+            "cell": "react-native-ios-hermes-startup::react-native::ios-pod-install-runtime-crash",
+            "title": "React Native iOS Fails to Launch When the New Architecture Pod Setup Is Out of Sync",
+            "description": "The iOS app builds but crashes or stops launching when CocoaPods and React Native native modules are not aligned.",
+            "tags": [
+                "react-native",
+                "ios",
+                "cocoapods",
+                "hermes"
+            ],
+            "angle": "Open with the iOS startup error and the stage where it breaks, such as `pod install` output or an Xcode launch crash. Explain the mechanism behind native module registration, Hermes, and pod linkage, and why stale Pods or mismatched native settings prevent the app from starting. Show the exact cleanup and reinstall steps plus the files that need to match.",
+            "slug": "react-native-ios-fails-to-launch-when-the-new-architecture-pod-setup-is-out-of-sync"
+        },
+        {
+            "cell": "bun-fetch-undici-headers::bun::node-fetch-compat-limit",
+            "title": "Bun Returns the Wrong Header Values When a Node Fetch Library Assumes Undici Semantics",
+            "description": "A fetch wrapper or HTTP client behaves incorrectly because it expects Node runtime details that Bun does not mirror exactly.",
+            "tags": [
+                "bun",
+                "fetch",
+                "http",
+                "compatibility"
+            ],
+            "angle": "Open with the concrete wrong-result symptom, such as missing headers, unexpected casing, or a thrown compatibility error. Explain where Bun follows the Fetch standard and where Node-centric libraries depend on `undici`-specific behavior, then show how to adapt the client or choose a Bun-compatible package. The takeaway should be which API assumptions are safe and which need replacement.",
+            "slug": "bun-returns-the-wrong-header-values-when-a-node-fetch-library-assumes-undici-semantics"
+        },
+        {
+            "cell": "docker-port-exposed-but-unreachable::docker::published-port-host-binding",
+            "title": "Docker Shows a Published Port but the Service Is Still Unreachable on the Host",
+            "description": "`docker run -p` exposes a port, yet the service still refuses connections because the app is bound to the wrong interface or port.",
+            "tags": [
+                "docker",
+                "networking",
+                "ports",
+                "containers"
+            ],
+            "angle": "Start with the refused-connection symptom and the exact host and container ports. Explain container networking, the difference between `127.0.0.1` and `0.0.0.0` inside the container, and why publishing a port does not help if the process only listens on loopback or another port. Show the bind setting, the `-p` mapping, and how to verify listening sockets inside the container.",
+            "slug": "docker-shows-a-published-port-but-the-service-is-still-unreachable-on-the-host"
+        },
+        {
+            "cell": "s3-cors-object-access::aws-s3::browser-get-object-denied",
+            "title": "AWS S3 Blocks Browser Downloads with CORS When the Bucket Policy Allows Access but the CORS Rule Does Not",
+            "description": "The object exists and permissions are valid, but the browser blocks the response because the bucket CORS rule is incomplete.",
+            "tags": [
+                "aws-s3",
+                "cors",
+                "browser",
+                "storage"
+            ],
+            "angle": "Open with the browser CORS error and the exact request URL to the object. Explain the difference between IAM permission and bucket CORS configuration, including why S3 can return the file while the browser still blocks JavaScript from reading it. Show the CORS XML or JSON rule that must include the origin, method, and headers you actually use.",
+            "slug": "aws-s3-blocks-browser-downloads-with-cors-when-the-bucket-policy-allows-access-but-the-cors-rule-does-not"
+        },
+        {
+            "cell": "nextjs-middleware-loop::nextjs::rewrite-self-trigger",
+            "title": "Next.js Middleware Rewrites Into Its Own Matcher and Creates an Infinite Redirect Loop",
+            "description": "Requests keep redirecting because middleware rewrites or redirects also match the same middleware path.",
+            "tags": [
+                "nextjs",
+                "middleware",
+                "rewrites",
+                "routing"
+            ],
+            "angle": "Open with the repeated redirect or endless reload symptom and the matched path. Explain how Next.js middleware runs before routing, how matcher patterns are evaluated, and why a rewrite to a protected path can recurse into the same middleware again. Show a matcher exclusion or path guard that breaks the loop without disabling the middleware.",
+            "slug": "next-js-middleware-rewrites-into-its-own-matcher-and-creates-an-infinite-redirect-loop"
+        },
+        {
+            "cell": "vite-dev-proxy-cookie-domain::vite::api-proxy-cookies-not-set",
+            "title": "Vite Proxies an API Request but the Browser Drops Session Cookies on the Response",
+            "description": "The proxied request succeeds, yet the browser ignores `Set-Cookie` because the proxy and cookie attributes do not line up.",
+            "tags": [
+                "vite",
+                "proxy",
+                "cookies",
+                "browser"
+            ],
+            "angle": "Start with the browser symptom: login succeeds, but the cookie never appears or is never sent back. Explain how Vite’s dev proxy forwards requests, why `Set-Cookie` depends on domain, path, `SameSite`, and secure attributes, and how a localhost proxy can still prevent persistence. Show the proxy config and the cookie settings that make the browser accept the session.",
+            "slug": "vite-proxies-an-api-request-but-the-browser-drops-session-cookies-on-the-response"
+        }
+    ],
     "drafted": [
         {
             "cell": "nginx-proxy-pass-trailing-slash::nginx::upstream-path-rewrite",
