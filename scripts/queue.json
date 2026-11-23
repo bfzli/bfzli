@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-23T00:31:20.229Z",
     "ideas": [
         {
-            "cell": "cloudflare-account-linking::cloudflare-workers::wrangler-login-and-deploy",
-            "title": "Cloudflare Workers Rejects Deployment Until `wrangler` Is Connected to the Right Account",
-            "description": "`wrangler deploy` fails or targets the wrong account when the local config is not linked to the intended Cloudflare account.",
-            "tags": [
-                "cloudflare-workers",
-                "wrangler",
-                "deployment",
-                "authentication"
-            ],
-            "angle": "Open with the exact `wrangler` error and the account-targeting symptom. Explain how account selection, API tokens, and `wrangler.toml` project metadata interact, and why a misbound login or token causes deployment to fail or land in the wrong place. Show the commands to re-link the project and verify the active account before deploying.",
-            "slug": "cloudflare-workers-rejects-deployment-until-wrangler-is-connected-to-the-right-account"
-        },
-        {
             "cell": "electron-context-isolation-preload-bridge::electron::renderer-missing-api",
             "title": "Electron Renderer Sees `window.api` as Undefined After a Preload Bridge Is Not Exposed",
             "description": "The renderer cannot call exposed IPC helpers because the preload script never attaches them to the isolated page.",
@@ -121,18 +108,18 @@
     ],
     "drafted": [
         {
-            "cell": "nginx-proxy-pass-trailing-slash::nginx::upstream-path-rewrite",
-            "title": "Nginx Proxies the Wrong Upstream URL When `proxy_pass` Uses the Wrong Trailing Slash",
-            "description": "Requests reach the upstream app with an unexpected path because `proxy_pass` rewrites the URI differently than intended.",
+            "cell": "cloudflare-account-linking::cloudflare-workers::wrangler-login-and-deploy",
+            "title": "Cloudflare Workers Rejects Deployment Until `wrangler` Is Connected to the Right Account",
+            "description": "`wrangler deploy` fails or targets the wrong account when the local config is not linked to the intended Cloudflare account.",
             "tags": [
-                "nginx",
-                "reverse-proxy",
-                "proxy-pass",
-                "routing"
+                "cloudflare-workers",
+                "wrangler",
+                "deployment",
+                "authentication"
             ],
-            "angle": "Begin with the incorrect upstream path or 404 returned by the backend. Explain the URI rewrite rules around `proxy_pass`, especially the difference between including and omitting a trailing slash in the upstream URL, and how that changes path joining. Show the correct location block for preserving or rewriting the request path and how to confirm the final upstream URI.",
-            "slug": "nginx-proxies-the-wrong-upstream-url-when-proxy-pass-uses-the-wrong-trailing-slash",
-            "draftedAt": "2026-11-16T01:29:56.976Z"
+            "angle": "Open with the exact `wrangler` error and the account-targeting symptom. Explain how account selection, API tokens, and `wrangler.toml` project metadata interact, and why a misbound login or token causes deployment to fail or land in the wrong place. Show the commands to re-link the project and verify the active account before deploying.",
+            "slug": "cloudflare-workers-rejects-deployment-until-wrangler-is-connected-to-the-right-account",
+            "draftedAt": "2026-11-23T02:05:52.387Z"
         }
     ]
 }
