@@ -1,0 +1,329 @@
+---
+title: "Electron Renderer Sees `window.api` as Undefined After a Preload Bridge Is Not Exposed"
+description: "The renderer cannot call exposed IPC helpers because the preload script never attaches them to the isolated page."
+tags: ["electron", "preload", "context-isolation", "ipc"]
+date: Nov 24, 2026
+cell: "electron-context-isolation-preload-bridge::electron::renderer-missing-api"
+---
+
+The renderer breaks at `window.api` access sites with `TypeError: Cannot read properties of undefined (reading 'ping')` or `TypeError: Cannot read properties of undefined (reading 'invoke')` because the preload script never exposed the bridge into the isolated page.
+
+## What the error means
+
+In an Electron renderer with `contextIsolation` enabled, the page’s global object is not the same object that the preload script can mutate directly. If the renderer code expects `window.api` to exist and the preload never registered it with `contextBridge.exposeInMainWorld()`, then `window.api` is `undefined`. The first property access on it fails immediately.
+
+The access site is usually simple:
+
+```ts
+window.api.ping()
+```
+
+or:
+
+```ts
+const result = await window.api.invoke('read-config')
+```
+
+If `window.api` was never exposed, the runtime error appears in the renderer console and the call never reaches IPC.
+
+## How Electron isolates the renderer
+
+Electron has three pieces involved here:
+
+- `contextIsolation`
+- `preload`
+- `contextBridge.exposeInMainWorld()`
+
+When `contextIsolation: true` is set, the renderer page runs in a separate JavaScript world from the preload script. The page can still use the DOM, but it does not share the same global object as preload.
+
+The preload script runs before the page script and can reach privileged Electron APIs such as `ipcRenderer`. However, preload code does not automatically “leak” variables into the page. A plain assignment like `window.api = ...` is not a reliable way to publish a safe API in an isolated context, because the page and preload are not operating on the same `window` object in the way older Electron code often assumed.
+
+`contextBridge.exposeInMainWorld()` is the supported mechanism for making a controlled API available to the page. It creates a property on the renderer’s `window` object that points to a bridged, serializable interface.
+
+## The common failure mode
+
+A preload file often looks plausible but still fails to expose anything usable.
+
+```ts
+// preload.ts
+import { ipcRenderer } from 'electron'
+
+window.api = {
+  ping: () => ipcRenderer.invoke('ping')
+}
+```
+
+This can fail for two separate reasons:
+
+1. `window.api` is assigned in the wrong world when `contextIsolation` is on.
+2. Even if it appears to work in a specific setup, it is not the recommended bridge mechanism and can break under stricter isolation or different packaging conditions.
+
+The result is a renderer-side `undefined` at the access site. The renderer code assumes the bridge exists, but the preload did not attach it to the page world in the supported way.
+
+## The correct Electron configuration
+
+A working Electron app needs the main process to attach the preload file and enable context isolation.
+
+```ts
+// main.ts
+import { app, BrowserWindow } from 'electron'
+import path from 'node:path'
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    webPreferences: {
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
+  })
+
+  win.loadURL('http://localhost:3000')
+}
+
+app.whenReady().then(createWindow)
+```
+
+The important parts are:
+
+- `contextIsolation: true`
+- `preload: path.join(__dirname, 'preload.js')`
+
+If `preload` is omitted, the script never runs. If `preload` points at the wrong file or an invalid build output, the bridge never gets registered. If `contextIsolation` is disabled, direct `window` mutation may appear to work, but that setup weakens the security model and can create incompatible assumptions later.
+
+## Exposing the bridge from preload
+
+The preload script should use `contextBridge.exposeInMainWorld()` and expose only the methods the page needs.
+
+```ts
+// preload.ts
+import { contextBridge, ipcRenderer } from 'electron'
+
+type Api = {
+  ping: () => Promise<string>
+  readConfig: () => Promise<{ theme: string }>
+}
+
+const api: Api = {
+  ping: () => ipcRenderer.invoke('ping'),
+  readConfig: () => ipcRenderer.invoke('read-config')
+}
+
+contextBridge.exposeInMainWorld('api', api)
+```
+
+This creates `window.api` in the renderer page with the defined methods.
+
+A few details matter here:
+
+- `contextBridge.exposeInMainWorld('api', api)` must run at preload startup.
+- The exposed object should contain only functions and data that can be safely bridged.
+- The methods should usually wrap `ipcRenderer.invoke()` for request/response flows.
+
+The bridge is not a direct reference to `ipcRenderer`. Electron serializes and proxies the exposed surface so the renderer cannot get unrestricted access to the privileged API.
+
+## Why direct `window` assignment fails under isolation
+
+Under `contextIsolation: true`, preload and page scripts do not share mutable globals. The preload script can still read and manipulate its own world, but the page script sees a different global environment.
+
+That means this pattern is not sufficient:
+
+```ts
+window.api = { ping: () => ipcRenderer.invoke('ping') }
+```
+
+Even if the assignment executes without a syntax error, the renderer page is not guaranteed to see the property. The page executes in its own isolated world, so `window.api` remains `undefined` there.
+
+`contextBridge.exposeInMainWorld()` exists specifically to cross that boundary safely.
+
+## Consuming the bridge in the renderer
+
+Once preload exposes the API, the renderer can call it normally.
+
+```ts
+// renderer.ts
+async function boot() {
+  const pong = await window.api.ping()
+  console.log(pong)
+
+  const config = await window.api.readConfig()
+  document.body.textContent = `Theme: ${config.theme}`
+}
+
+boot().catch((error) => {
+  console.error('Renderer boot failed:', error)
+})
+```
+
+If you are using TypeScript, you also need type declarations so `window.api` is recognized by the compiler.
+
+```ts
+// global.d.ts
+export {}
+
+declare global {
+  interface Window {
+    api: {
+      ping: () => Promise<string>
+      readConfig: () => Promise<{ theme: string }>
+    }
+  }
+}
+```
+
+Without that declaration, TypeScript reports `Property 'api' does not exist on type 'Window & typeof globalThis'`, even if the runtime bridge exists.
+
+## Verifying that preload is actually running
+
+A missing bridge can come from a preload path problem rather than a bridge implementation problem. Verify the preload file is loaded by adding a controlled log.
+
+```ts
+// preload.ts
+import { contextBridge, ipcRenderer } from 'electron'
+
+console.log('preload loaded')
+
+contextBridge.exposeInMainWorld('api', {
+  ping: () => ipcRenderer.invoke('ping')
+})
+```
+
+Then inspect the renderer DevTools console. If the log never appears, the preload script is not executing.
+
+Common causes include:
+
+- `preload` points to the TypeScript source file instead of the compiled JavaScript file.
+- The path uses `__dirname` incorrectly after bundling.
+- The build step does not emit the preload artifact where the main process expects it.
+
+For example, if your build outputs to `dist/main` and `dist/preload`, then `preload: path.join(__dirname, 'preload.js')` only works when `__dirname` is the compiled main-process directory and the preload output sits next to it. If the preload is bundled elsewhere, update the path to match the built layout.
+
+## Why `ipcRenderer` should not be exposed directly
+
+A renderer bug often starts as an `undefined` bridge problem, but the fix should still preserve the security boundary. Exposing `ipcRenderer` itself gives the page too much power.
+
+Avoid this:
+
+```ts
+contextBridge.exposeInMainWorld('ipcRenderer', ipcRenderer)
+```
+
+Instead expose narrowly scoped functions:
+
+```ts
+contextBridge.exposeInMainWorld('api', {
+  ping: () => ipcRenderer.invoke('ping'),
+  saveSettings: (settings: { theme: string }) =>
+    ipcRenderer.invoke('save-settings', settings)
+})
+```
+
+This limits the page to specific channels and data shapes. It also makes it easier to reason about what the renderer can do.
+
+## Main-process IPC handlers for the exposed methods
+
+The renderer bridge only works if the main process listens on the same channel names.
+
+```ts
+// main.ts
+import { ipcMain } from 'electron'
+
+ipcMain.handle('ping', async () => {
+  return 'pong'
+})
+
+ipcMain.handle('read-config', async () => {
+  return { theme: 'dark' }
+})
+```
+
+`ipcRenderer.invoke('ping')` calls `ipcMain.handle('ping', ...)`. If the handler is missing, the renderer gets a rejected promise rather than `undefined`, which is a different failure mode.
+
+That distinction matters:
+
+- `window.api` is `undefined` when the preload bridge was not exposed.
+- `window.api.ping()` rejects when the bridge exists but the IPC handler does not.
+
+## A minimal working set
+
+A complete minimal setup looks like this.
+
+```ts
+// main.ts
+import { app, BrowserWindow, ipcMain } from 'electron'
+import path from 'node:path'
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 1000,
+    height: 700,
+    webPreferences: {
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
+  })
+
+  win.loadURL('http://localhost:3000')
+}
+
+ipcMain.handle('ping', async () => 'pong')
+app.whenReady().then(createWindow)
+```
+
+```ts
+// preload.ts
+import { contextBridge, ipcRenderer } from 'electron'
+
+contextBridge.exposeInMainWorld('api', {
+  ping: () => ipcRenderer.invoke('ping')
+})
+```
+
+```ts
+// renderer.ts
+async function main() {
+  const result = await window.api.ping()
+  console.log(result)
+}
+
+main()
+```
+
+```ts
+// global.d.ts
+export {}
+
+declare global {
+  interface Window {
+    api: {
+      ping: () => Promise<string>
+    }
+  }
+}
+```
+
+If this still yields `window.api` as `undefined`, the remaining problem is usually one of these:
+
+- the preload file path is wrong
+- the preload bundle is not included in the packaged app
+- `contextBridge.exposeInMainWorld()` is not being executed
+- the renderer is loading a different window than the one configured with preload
+
+## Debugging checklist
+
+Check the following in order:
+
+1. Confirm `BrowserWindow` has `webPreferences.preload` set to the built preload file.
+2. Confirm `contextIsolation: true` is enabled.
+3. Confirm the preload script runs by logging from preload.
+4. Confirm `contextBridge.exposeInMainWorld('api', ...)` executes before the renderer call site runs.
+5. Confirm the renderer references `window.api`, not a local variable named `api`.
+6. Confirm the preload API and renderer call site use the same property name.
+7. Confirm the main process has matching `ipcMain.handle()` handlers for each `invoke()` channel.
+
+If all seven are correct, the `undefined` access site disappears, and the renderer can call the bridge normally.
+
+## Practical takeaway
+
+Prefer `contextBridge.exposeInMainWorld()` in a preload script, with `contextIsolation: true` and a correctly resolved `preload` path. Do not assign IPC helpers directly to `window` and expect them to survive isolation. Keep the exposed surface small, match the preload and renderer property names exactly, and verify that the preload file actually executes in the packaged build.
