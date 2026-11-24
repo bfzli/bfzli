@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-23T00:31:20.229Z",
     "ideas": [
         {
-            "cell": "electron-context-isolation-preload-bridge::electron::renderer-missing-api",
-            "title": "Electron Renderer Sees `window.api` as Undefined After a Preload Bridge Is Not Exposed",
-            "description": "The renderer cannot call exposed IPC helpers because the preload script never attaches them to the isolated page.",
-            "tags": [
-                "electron",
-                "preload",
-                "context-isolation",
-                "ipc"
-            ],
-            "angle": "Start with the renderer-side `undefined` symptom and the exact access site. Explain how `contextIsolation`, `preload`, and `contextBridge.exposeInMainWorld()` work together, and why assigning to `window` directly fails under isolation. Show the correct preload export and how the renderer should consume it.",
-            "slug": "electron-renderer-sees-window-api-as-undefined-after-a-preload-bridge-is-not-exposed"
-        },
-        {
             "cell": "hono-json-body-before-validation::hono::middleware-consumes-request-body",
             "title": "Hono Rejects JSON Validation Because Middleware Reads `c.req.json()` First",
             "description": "The route cannot parse the body again after middleware consumes the request stream before validation runs.",
@@ -108,18 +95,18 @@
     ],
     "drafted": [
         {
-            "cell": "cloudflare-account-linking::cloudflare-workers::wrangler-login-and-deploy",
-            "title": "Cloudflare Workers Rejects Deployment Until `wrangler` Is Connected to the Right Account",
-            "description": "`wrangler deploy` fails or targets the wrong account when the local config is not linked to the intended Cloudflare account.",
+            "cell": "electron-context-isolation-preload-bridge::electron::renderer-missing-api",
+            "title": "Electron Renderer Sees `window.api` as Undefined After a Preload Bridge Is Not Exposed",
+            "description": "The renderer cannot call exposed IPC helpers because the preload script never attaches them to the isolated page.",
             "tags": [
-                "cloudflare-workers",
-                "wrangler",
-                "deployment",
-                "authentication"
+                "electron",
+                "preload",
+                "context-isolation",
+                "ipc"
             ],
-            "angle": "Open with the exact `wrangler` error and the account-targeting symptom. Explain how account selection, API tokens, and `wrangler.toml` project metadata interact, and why a misbound login or token causes deployment to fail or land in the wrong place. Show the commands to re-link the project and verify the active account before deploying.",
-            "slug": "cloudflare-workers-rejects-deployment-until-wrangler-is-connected-to-the-right-account",
-            "draftedAt": "2026-11-23T02:05:52.387Z"
+            "angle": "Start with the renderer-side `undefined` symptom and the exact access site. Explain how `contextIsolation`, `preload`, and `contextBridge.exposeInMainWorld()` work together, and why assigning to `window` directly fails under isolation. Show the correct preload export and how the renderer should consume it.",
+            "slug": "electron-renderer-sees-window-api-as-undefined-after-a-preload-bridge-is-not-exposed",
+            "draftedAt": "2026-11-24T05:41:33.318Z"
         }
     ]
 }
