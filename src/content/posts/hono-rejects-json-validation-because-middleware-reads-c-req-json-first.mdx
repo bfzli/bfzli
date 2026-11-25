@@ -1,0 +1,331 @@
+---
+title: "Hono Rejects JSON Validation Because Middleware Reads `c.req.json()` First"
+description: "The route cannot parse the body again after middleware consumes the request stream before validation runs."
+tags: ["hono", "middleware", "json", "validation"]
+date: Nov 25, 2026
+cell: "hono-json-body-before-validation::hono::middleware-consumes-request-body"
+---
+
+`400 Bad Request` from a Hono validation route with `c.req.json()` already called in middleware, followed by `SyntaxError: Unexpected end of JSON input`.
+
+## Why the body disappears
+
+In the Fetch API, `Request.body` is a one-shot stream. Once code reads it, the stream is consumed. A second read does not get the same bytes again.
+
+That applies to Hono because `c.req.json()`, `c.req.text()`, `c.req.formData()`, and `c.req.arrayBuffer()` all read from the underlying request body stream. If middleware reads the body before the route handler or validation layer does, the later read has nothing left to parse.
+
+The result depends on timing and implementation details, but the common failure modes are:
+
+- `c.req.json()` throws `SyntaxError: Unexpected end of JSON input`
+- validation receives `undefined`, `{}`, or an empty body
+- Hono returns `400 Bad Request`
+- schema validation fails even though the client sent valid JSON
+
+The important point is that the request body is not a reusable buffer unless you explicitly make it one.
+
+## How Hono gets into this state
+
+Hono middleware runs in order, from top to bottom. If one middleware reads the request body, that read happens before later middleware and before the final handler.
+
+A typical problematic chain looks like this:
+
+```ts
+import { Hono } from 'hono'
+import { z } from 'zod'
+import { zValidator } from '@hono/zod-validator'
+
+const app = new Hono()
+
+app.use('/api/*', async (c, next) => {
+  const payload = await c.req.json()
+  console.log('incoming payload', payload)
+  await next()
+})
+
+const schema = z.object({
+  name: z.string(),
+  email: z.string().email(),
+})
+
+app.post('/api/users', zValidator('json', schema), async (c) => {
+  const body = c.req.valid('json')
+  return c.json({ ok: true, body })
+})
+```
+
+The body parse in `app.use()` consumes the stream. When `zValidator('json', schema)` later tries to read JSON for validation, it is reading a body that has already been drained.
+
+Hono’s request wrapper does not magically cache every body read across middleware by default. If a handler or middleware needs the same data later, you have to preserve it yourself.
+
+## Why validation sees an empty body
+
+`zValidator('json', schema)` validates the JSON body by reading the request payload. Internally, it needs to parse the body to obtain an object for schema checking.
+
+If the request stream is already consumed, the validator cannot reconstruct the original JSON from nothing. Depending on the runtime, it may fail with a parse error or pass an empty value downstream. Either way, the route no longer sees the original payload.
+
+This is not specific to `zValidator`. Any code that reads the body first can trigger the same issue:
+
+- custom auth middleware that calls `await c.req.json()`
+- logging middleware that inspects request JSON
+- tracing middleware that parses body fields
+- idempotency middleware that hashes the body after reading it
+- `app.use()` middleware registered before a validator
+
+The problem is the ordering plus the stream semantics.
+
+## Reproducing the failure
+
+The following example is minimal and runnable.
+
+Install the packages:
+
+```sh
+npm install hono @hono/zod-validator zod
+```
+
+Create `src/index.ts`:
+
+```ts
+import { Hono } from 'hono'
+import { z } from 'zod'
+import { zValidator } from '@hono/zod-validator'
+
+const app = new Hono()
+
+app.use('/users/*', async (c, next) => {
+  const body = await c.req.json()
+  console.log('middleware saw', body)
+  await next()
+})
+
+const createUserSchema = z.object({
+  name: z.string(),
+  email: z.string().email(),
+})
+
+app.post('/users', zValidator('json', createUserSchema), (c) => {
+  const body = c.req.valid('json')
+  return c.json({ body })
+})
+
+export default app
+```
+
+Run it with a Hono-compatible runtime. For local Node testing, `hono/server` or a platform adapter can be used; for example, with `tsx`:
+
+```sh
+npm install -D tsx
+npx tsx src/index.ts
+```
+
+Send a request:
+
+```sh
+curl -i http://localhost:3000/users \
+  -H 'content-type: application/json' \
+  -d '{"name":"Ada","email":"ada@example.com"}'
+```
+
+The validator path can fail because the middleware has already consumed the body. If the body is parsed again, the second read can’t recover the original stream.
+
+## Fix 1: Move parsing to the final consumer
+
+If only the route handler needs the JSON, remove the early parse from middleware and parse once at the point of use.
+
+```ts
+import { Hono } from 'hono'
+import { z } from 'zod'
+import { zValidator } from '@hono/zod-validator'
+
+const app = new Hono()
+
+const createUserSchema = z.object({
+  name: z.string(),
+  email: z.string().email(),
+})
+
+app.post('/users', zValidator('json', createUserSchema), async (c) => {
+  const body = c.req.valid('json')
+  return c.json({
+    ok: true,
+    user: body,
+  })
+})
+```
+
+This is the simplest fix because it preserves the one-read rule. Validation and handler logic share the same parsed body without any extra stream consumption.
+
+If middleware only needs metadata such as headers, method, or path, keep it away from body parsing. Use `c.req.header()`, `c.req.method`, or `c.req.path` instead.
+
+## Fix 2: Clone the request before reading it
+
+If middleware must inspect the body and later code must parse it again, clone the underlying `Request` before reading.
+
+The Fetch API supports `request.clone()`. Each clone gets its own readable stream.
+
+In Hono, you can use `c.req.raw.clone()` when you need a separate body stream:
+
+```ts
+import { Hono } from 'hono'
+
+const app = new Hono()
+
+app.use('/users/*', async (c, next) => {
+  const cloned = c.req.raw.clone()
+  const payload = await cloned.json()
+
+  console.log('middleware saw', payload)
+
+  await next()
+})
+
+app.post('/users', async (c) => {
+  const payload = await c.req.json()
+  return c.json({ ok: true, payload })
+})
+```
+
+This works because the middleware reads from the clone, not from the original request stream used by the downstream route.
+
+There are tradeoffs:
+
+- cloning buffers or duplicates the stream internally
+- large request bodies cost memory
+- some runtimes impose limits on body handling
+- cloning too late does not help if the original stream is already read
+
+Use cloning only when multiple consumers truly need the body.
+
+## Fix 3: Centralize parsing and reuse the parsed value
+
+If several middleware layers need the same payload, parse it once and store the parsed object on context state.
+
+Hono lets you use `c.set()` and `c.get()` to pass data through the request lifecycle.
+
+```ts
+import { Hono } from 'hono'
+import { z } from 'zod'
+
+type Vars = {
+  jsonBody: unknown
+}
+
+const app = new Hono<{ Variables: Vars }>()
+
+app.use('/users/*', async (c, next) => {
+  const body = await c.req.json()
+  c.set('jsonBody', body)
+  await next()
+})
+
+const createUserSchema = z.object({
+  name: z.string(),
+  email: z.string().email(),
+})
+
+app.post('/users', async (c) => {
+  const rawBody = c.get('jsonBody')
+  const parsed = createUserSchema.parse(rawBody)
+
+  return c.json({ ok: true, user: parsed })
+})
+```
+
+This avoids repeated body reads. It also gives you one place to normalize input and one parse path for logging, auth, and business logic.
+
+If you use this pattern, make the stored value type explicit. `unknown` is safer than assuming the body shape before validation. Parse once, then pass the validated value forward.
+
+A more structured version is to store the validated payload instead of raw JSON:
+
+```ts
+import { Hono } from 'hono'
+import { z } from 'zod'
+
+type Vars = {
+  userInput: { name: string; email: string }
+}
+
+const app = new Hono<{ Variables: Vars }>()
+
+const createUserSchema = z.object({
+  name: z.string(),
+  email: z.string().email(),
+})
+
+app.use('/users', async (c, next) => {
+  const body = await c.req.json()
+  const parsed = createUserSchema.parse(body)
+  c.set('userInput', parsed)
+  await next()
+})
+
+app.post('/users', (c) => {
+  const body = c.get('userInput')
+  return c.json({ body })
+})
+```
+
+This approach is especially useful when the same schema is needed across multiple routes.
+
+## Fix 4: Keep validation before any body-reading middleware
+
+Middleware order matters. If you want to keep using `zValidator('json', schema)`, make sure no earlier middleware reads the body.
+
+A safe structure is:
+
+```ts
+import { Hono } from 'hono'
+import { z } from 'zod'
+import { zValidator } from '@hono/zod-validator'
+
+const app = new Hono()
+
+app.use('/api/*', async (c, next) => {
+  // Header-only checks are fine here.
+  const auth = c.req.header('authorization')
+  if (!auth) {
+    return c.json({ error: 'missing authorization' }, 401)
+  }
+  await next()
+})
+
+const schema = z.object({
+  title: z.string(),
+  completed: z.boolean(),
+})
+
+app.post('/api/todos', zValidator('json', schema), async (c) => {
+  const body = c.req.valid('json')
+  return c.json({ todo: body })
+})
+```
+
+This preserves the request body for the validator and the handler. If a middleware really needs the body, place that logic after validation or inside the route handler where the parse already occurred.
+
+## Why `Request.clone()` is not always the best default
+
+Cloning is correct from a stream perspective, but it is not free.
+
+The request body may be buffered twice or read through a tee’d stream, which increases memory usage. Large uploads, multipart forms, and high concurrency make that matter. It also adds complexity if some middleware only wants a small part of the body for logging.
+
+For body-heavy routes, prefer a single parse and shared state over multiple independent reads.
+
+For example, if the goal is only to log a field like `email`, parse once and log from the parsed object. Do not parse the raw body just for logging and then parse it again for validation.
+
+## Practical guardrails
+
+The easiest way to avoid this bug is to treat request bodies as a single-use resource.
+
+Use these rules:
+
+- do not call `c.req.json()` in generic middleware unless you also clone the request or store the parsed result
+- keep `zValidator('json', ...)` before any custom middleware that reads the body
+- use `c.req.raw.clone()` when two consumers need independent reads
+- prefer `c.set()` and `c.get()` when middleware and handlers need the same parsed payload
+- inspect headers, path, method, and query parameters in middleware instead of the body when possible
+
+If a route depends on JSON validation, confirm that the body is not being touched by earlier middleware, including shared `app.use()` registrations.
+
+## Practical takeaway
+
+Prefer parsing once and reusing the parsed value. If validation is the primary consumer, keep it before any body-reading middleware. If multiple layers need the payload, clone the request before reading or centralize parsing and store the result in context. That keeps the Fetch API stream intact, prevents `Unexpected end of JSON input`, and stops Hono validation from seeing an empty body.
