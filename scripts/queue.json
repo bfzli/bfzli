@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-23T00:31:20.229Z",
     "ideas": [
         {
-            "cell": "hono-json-body-before-validation::hono::middleware-consumes-request-body",
-            "title": "Hono Rejects JSON Validation Because Middleware Reads `c.req.json()` First",
-            "description": "The route cannot parse the body again after middleware consumes the request stream before validation runs.",
-            "tags": [
-                "hono",
-                "middleware",
-                "json",
-                "validation"
-            ],
-            "angle": "Open with the body-parse failure and the route that stops working. Explain why Request bodies are one-shot streams in the Fetch API, how Hono middleware ordering affects `c.req.json()`, and why validation sees an empty or consumed body. Show how to move parsing, clone the request, or centralize parsing so the handler still receives the payload.",
-            "slug": "hono-rejects-json-validation-because-middleware-reads-c-req-json-first"
-        },
-        {
             "cell": "react-native-ios-hermes-startup::react-native::ios-pod-install-runtime-crash",
             "title": "React Native iOS Fails to Launch When the New Architecture Pod Setup Is Out of Sync",
             "description": "The iOS app builds but crashes or stops launching when CocoaPods and React Native native modules are not aligned.",
@@ -95,18 +82,18 @@
     ],
     "drafted": [
         {
-            "cell": "electron-context-isolation-preload-bridge::electron::renderer-missing-api",
-            "title": "Electron Renderer Sees `window.api` as Undefined After a Preload Bridge Is Not Exposed",
-            "description": "The renderer cannot call exposed IPC helpers because the preload script never attaches them to the isolated page.",
+            "cell": "hono-json-body-before-validation::hono::middleware-consumes-request-body",
+            "title": "Hono Rejects JSON Validation Because Middleware Reads `c.req.json()` First",
+            "description": "The route cannot parse the body again after middleware consumes the request stream before validation runs.",
             "tags": [
-                "electron",
-                "preload",
-                "context-isolation",
-                "ipc"
+                "hono",
+                "middleware",
+                "json",
+                "validation"
             ],
-            "angle": "Start with the renderer-side `undefined` symptom and the exact access site. Explain how `contextIsolation`, `preload`, and `contextBridge.exposeInMainWorld()` work together, and why assigning to `window` directly fails under isolation. Show the correct preload export and how the renderer should consume it.",
-            "slug": "electron-renderer-sees-window-api-as-undefined-after-a-preload-bridge-is-not-exposed",
-            "draftedAt": "2026-11-24T05:41:33.318Z"
+            "angle": "Open with the body-parse failure and the route that stops working. Explain why Request bodies are one-shot streams in the Fetch API, how Hono middleware ordering affects `c.req.json()`, and why validation sees an empty or consumed body. Show how to move parsing, clone the request, or centralize parsing so the handler still receives the payload.",
+            "slug": "hono-rejects-json-validation-because-middleware-reads-c-req-json-first",
+            "draftedAt": "2026-11-25T04:43:34.032Z"
         }
     ]
 }
