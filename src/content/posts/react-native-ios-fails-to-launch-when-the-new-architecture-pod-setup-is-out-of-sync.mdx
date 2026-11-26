@@ -1,0 +1,316 @@
+---
+title: "React Native iOS Fails to Launch When the New Architecture Pod Setup Is Out of Sync"
+description: "The iOS app builds but crashes or stops launching when CocoaPods and React Native native modules are not aligned."
+tags: ["react-native", "ios", "cocoapods", "hermes"]
+date: Nov 26, 2026
+cell: "react-native-ios-hermes-startup::react-native::ios-pod-install-runtime-crash"
+---
+
+`The application could not be launched because the new architecture native module setup is out of sync` appears during iOS startup, after `pod install` succeeds or when Xcode attempts to launch the app, and the process stops with a launch failure instead of reaching the first screen.
+
+## What is breaking
+
+The iOS build can complete even when the app cannot start. That happens because compilation and startup are different stages.
+
+Compilation verifies that source files, generated headers, and linked libraries can be built into an `.app`. Startup then has to load the app binary, initialize Hermes or JavaScriptCore, register native modules, and resolve the bridge or the new architecture runtime. If the Pod graph and React Native configuration are out of sync, the app can be produced successfully but fail immediately at launch.
+
+Typical symptoms include:
+
+- Xcode reports a launch-time crash instead of a compile error.
+- The app builds, but the simulator closes the process as soon as it starts.
+- `pod install` finishes without failing, but the pod targets do not match the JavaScript or native configuration.
+- Native modules are missing, duplicated, or linked against the wrong architecture.
+
+Depending on the mismatch, the failure may show up as one of these errors:
+
+- `Native module cannot be null`
+- `RCTFatalException: Unhandled JS Exception`
+- `No module named 'ReactCommon'`
+- `No such module 'ReactAppDependencyProvider'`
+- `Invariant Violation: TurboModuleRegistry.getEnforcing(...)`
+- `Fatal error: Could not register module`
+
+The exact string depends on which part of the startup sequence is misaligned.
+
+## Why the app can build but still fail to launch
+
+React Native iOS startup has several layers.
+
+First, CocoaPods integrates React Native and third-party native modules into the Xcode project. Pods determine which Objective-C, C++, and Swift sources are compiled and how they are linked into the app.
+
+Second, React Native loads its runtime. In the legacy architecture, the bridge initializes and then native modules are registered through the bridge. In the new architecture, TurboModules and Fabric are wired through generated code and the `ReactAppDependencyProvider` or equivalent generated artifacts. These artifacts are produced from the pod setup and from the native configuration files.
+
+Third, Hermes loads the JavaScript bundle. If Hermes is enabled, the app expects the Hermes engine and related pods to be present and linked correctly. If the Podfile and generated configuration do not match the app’s actual settings, the runtime can fail before JavaScript executes any useful code.
+
+The launch path is sensitive to stale generated artifacts because React Native iOS uses generated and cached inputs:
+
+- `ios/Pods`
+- `ios/Podfile.lock`
+- `ios/Pods/Manifest.lock`
+- `ios/build`
+- `~/Library/Developer/Xcode/DerivedData`
+- generated files under `ios/build/generated` or similar paths, depending on the React Native version
+
+If any of these are built for a different combination of settings, the app can still compile against them but crash when it tries to load them.
+
+## The files that must match
+
+The new architecture setup is driven by several files that need to agree with each other.
+
+### `package.json`
+
+React Native and native module versions must be compatible.
+
+For example:
+
+```json
+{
+  "dependencies": {
+    "react": "18.2.0",
+    "react-native": "0.74.3"
+  }
+}
+```
+
+If a native module depends on a newer React Native iOS template or a different `react-native-codegen` output, startup can fail even if JavaScript dependencies are installed.
+
+### `ios/Podfile`
+
+The Podfile decides whether the new architecture is enabled, whether Hermes is used, and which pods are linked.
+
+Common flags include:
+
+```ruby
+ENV['RCT_NEW_ARCH_ENABLED'] = '1'
+ENV['USE_HERMES'] = '1'
+```
+
+A typical Podfile also includes the React Native autolinking setup:
+
+```ruby
+require_relative '../node_modules/react-native/scripts/react_native_pods'
+require_relative '../node_modules/@react-native-community/cli-platform-ios/native_modules'
+
+platform :ios, '13.4'
+
+prepare_react_native_project!
+
+target 'MyApp' do
+  config = use_native_modules!
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    :hermes_enabled => true,
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false
+    )
+  end
+end
+```
+
+The exact structure varies by React Native version, but the important point is that the Podfile, the JavaScript dependencies, and the native build settings must describe the same architecture.
+
+### `ios/Podfile.lock`
+
+This file freezes the resolved pod versions. If it is stale, CocoaPods may keep using old native module versions while the JavaScript side has moved forward.
+
+### `ios/YourApp.xcodeproj/project.pbxproj`
+
+This file carries build settings such as `ENABLE_NEW_ARCHITECTURE`, search paths, and framework linkage. It should not drift away from what the Podfile installs.
+
+### `ios/YourApp.xcworkspace`
+
+Xcode must open the workspace, not the `.xcodeproj`, because the workspace includes pod targets. Opening the project directly can produce unresolved symbols or missing build phases.
+
+## How the new architecture changes startup
+
+The new architecture is not just a build flag. It changes how modules are discovered and instantiated.
+
+With the legacy bridge, modules are registered through the bridge and accessed by name. Missing modules often show up as JavaScript warnings after the bridge starts.
+
+With the new architecture, modules may be generated from spec files and accessed through TurboModule lookup. That introduces stricter startup expectations:
+
+- generated native code must exist,
+- the pod target must include the generated sources,
+- the app must link the correct pods,
+- the runtime must see the same architecture flags that were used to generate the code.
+
+If `RCT_NEW_ARCH_ENABLED=1` is set but pods were installed before that flag was enabled, the app may still build against old pod artifacts. At launch, the module registry tries to resolve modules that were never generated or linked.
+
+Hermes makes the issue more visible because startup becomes more deterministic. The engine loads the JavaScript bundle early, and any native module registration problem can surface immediately when JS asks for a native dependency. That is why the crash may appear to happen “before the app opens.”
+
+## Exact cleanup and reinstall steps
+
+The safest fix is to remove stale native artifacts, reinstall pods, and regenerate the iOS build state from the current configuration.
+
+Run these commands from the project root:
+
+```sh
+# Stop Metro and any running iOS app processes first if needed.
+
+cd ios
+rm -rf Pods Podfile.lock build
+rm -rf ~/Library/Developer/Xcode/DerivedData/*
+pod deintegrate
+pod install
+cd ..
+```
+
+Then clear JavaScript state and rebuild:
+
+```sh
+rm -rf node_modules
+yarn install
+yarn start --reset-cache
+```
+
+If `node_modules` is not the problem, reinstalling it is not always necessary. The critical part is that `Pods`, `Podfile.lock`, and DerivedData are removed so CocoaPods and Xcode can regenerate native outputs from the current Podfile and package versions.
+
+If you use npm, replace `yarn install` with:
+
+```sh
+npm ci
+```
+
+Then build from the workspace:
+
+```sh
+xed ios
+```
+
+Or open `ios/MyApp.xcworkspace` in Xcode and run the app from there.
+
+## When `pod install` must be rerun
+
+`pod install` should be rerun any time one of these changes:
+
+- `react-native` version changes
+- `react` version changes
+- `RCT_NEW_ARCH_ENABLED` changes
+- `USE_HERMES` changes
+- native modules are added, removed, or upgraded
+- Podfile changes
+- iOS deployment target changes
+- codegen-related specs change
+
+If you only change JavaScript code, pods usually do not need to be reinstalled. If you change any native configuration that affects module generation or linkage, they do.
+
+## Why stale Pods break startup
+
+CocoaPods generates a snapshot of the dependency graph. That snapshot includes pod versions, header search paths, frameworks, compiler flags, and build phases.
+
+When React Native switches between legacy and new architecture modes, the generated pods differ. Examples include:
+
+- different header export paths,
+- different codegen outputs,
+- different framework dependencies,
+- different `React-Codegen` or `ReactAppDependencyProvider` targets,
+- Hermes-specific or JSC-specific linkage.
+
+If `Podfile.lock` still points to old artifacts, CocoaPods may not resolve the newest generated targets. The app can then compile because Xcode finds some symbols, but the runtime initialization expects a different module graph.
+
+A common failure pattern is this:
+
+1. `pod install` runs with one set of environment flags.
+2. Xcode builds using cached DerivedData and old build products.
+3. The app launches with a pod set that does not contain the current generated native modules.
+4. TurboModule lookup or bridge initialization fails.
+
+Removing DerivedData matters because Xcode caches compiled pods aggressively. Removing `Pods` matters because the current install needs to regenerate the dependency graph from scratch.
+
+## Verifying Hermes and the architecture flags
+
+The runtime settings should match in all relevant places.
+
+Check the Podfile for Hermes and new architecture settings:
+
+```ruby
+ENV['RCT_NEW_ARCH_ENABLED'] = '1'
+ENV['USE_HERMES'] = '1'
+```
+
+Check your Xcode build settings or scheme environment variables if they override the Podfile.
+
+Then verify the installed pods include Hermes-related targets and React Native generated targets. A successful install usually prints pod targets such as:
+
+- `React-Codegen`
+- `ReactCommon`
+- `hermes-engine`
+- `RCT-Folly`
+- `Yoga`
+- `ReactAppDependencyProvider`
+
+The exact list varies by React Native version. Missing targets usually mean the install did not run against the intended configuration.
+
+If you need to inspect the workspace wiring, open `ios/Pods/Target Support Files` and confirm the generated configuration files exist for the current pod graph.
+
+## Rebuilding with a clean iOS state
+
+After reinstalling pods, rebuild with a clean app target.
+
+Use Xcode’s Product > Clean Build Folder, or run:
+
+```sh
+xcodebuild clean \
+  -workspace ios/MyApp.xcworkspace \
+  -scheme MyApp \
+  -configuration Debug
+```
+
+Then build again:
+
+```sh
+xcodebuild \
+  -workspace ios/MyApp.xcworkspace \
+  -scheme MyApp \
+  -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 15'
+```
+
+If the app still fails during launch, inspect the Xcode console for the first fatal native or TurboModule error. The first error is usually the useful one. Later messages are often consequences of the first missing module.
+
+## Common mismatches to check
+
+These mismatches account for most launch failures tied to the new architecture pod setup:
+
+- `Podfile` enables new architecture, but `Podfile.lock` was generated before the change.
+- Hermes is enabled in the Podfile, but the app or scheme still expects a different JS engine.
+- A native module pod was added in `package.json`, but `pod install` was not rerun.
+- Xcode is opening `MyApp.xcodeproj` instead of `MyApp.xcworkspace`.
+- DerivedData contains a previous build with incompatible generated code.
+- The iOS deployment target in the Podfile differs from the app target.
+- `react-native` and `react` versions are out of the supported range for the installed native modules.
+
+If one module is misconfigured, module registration can fail early enough to stop the entire app. That is especially true with new architecture codegen, where one missing generated target can break the dependency chain for the whole runtime.
+
+## A minimal reference checklist
+
+Use this sequence when the app builds but does not launch:
+
+```sh
+cd ios
+rm -rf Pods Podfile.lock build
+pod deintegrate
+pod install
+rm -rf ~/Library/Developer/Xcode/DerivedData/*
+cd ..
+yarn start --reset-cache
+```
+
+Then confirm:
+
+- `ios/Podfile` has the intended `RCT_NEW_ARCH_ENABLED` and `USE_HERMES` values.
+- `ios/Podfile.lock` was regenerated by the latest `pod install`.
+- `ios/MyApp.xcworkspace` is the file being opened.
+- the React Native version in `package.json` matches the native module versions.
+- the app target and Podfile use the same iOS deployment target.
+
+## Practical takeaway
+
+Prefer a full pod and DerivedData reset when the iOS app builds but fails to launch after a new architecture change. That fixes the most common cause: stale generated native code and a mismatched pod graph. If the problem returns, keep `Podfile`, `Podfile.lock`, `package.json`, and the Xcode workspace in sync, and rerun `pod install` whenever Hermes or `RCT_NEW_ARCH_ENABLED` changes.
