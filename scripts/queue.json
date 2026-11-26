@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-23T00:31:20.229Z",
     "ideas": [
         {
-            "cell": "react-native-ios-hermes-startup::react-native::ios-pod-install-runtime-crash",
-            "title": "React Native iOS Fails to Launch When the New Architecture Pod Setup Is Out of Sync",
-            "description": "The iOS app builds but crashes or stops launching when CocoaPods and React Native native modules are not aligned.",
-            "tags": [
-                "react-native",
-                "ios",
-                "cocoapods",
-                "hermes"
-            ],
-            "angle": "Open with the iOS startup error and the stage where it breaks, such as `pod install` output or an Xcode launch crash. Explain the mechanism behind native module registration, Hermes, and pod linkage, and why stale Pods or mismatched native settings prevent the app from starting. Show the exact cleanup and reinstall steps plus the files that need to match.",
-            "slug": "react-native-ios-fails-to-launch-when-the-new-architecture-pod-setup-is-out-of-sync"
-        },
-        {
             "cell": "bun-fetch-undici-headers::bun::node-fetch-compat-limit",
             "title": "Bun Returns the Wrong Header Values When a Node Fetch Library Assumes Undici Semantics",
             "description": "A fetch wrapper or HTTP client behaves incorrectly because it expects Node runtime details that Bun does not mirror exactly.",
@@ -82,18 +69,18 @@
     ],
     "drafted": [
         {
-            "cell": "hono-json-body-before-validation::hono::middleware-consumes-request-body",
-            "title": "Hono Rejects JSON Validation Because Middleware Reads `c.req.json()` First",
-            "description": "The route cannot parse the body again after middleware consumes the request stream before validation runs.",
+            "cell": "react-native-ios-hermes-startup::react-native::ios-pod-install-runtime-crash",
+            "title": "React Native iOS Fails to Launch When the New Architecture Pod Setup Is Out of Sync",
+            "description": "The iOS app builds but crashes or stops launching when CocoaPods and React Native native modules are not aligned.",
             "tags": [
-                "hono",
-                "middleware",
-                "json",
-                "validation"
+                "react-native",
+                "ios",
+                "cocoapods",
+                "hermes"
             ],
-            "angle": "Open with the body-parse failure and the route that stops working. Explain why Request bodies are one-shot streams in the Fetch API, how Hono middleware ordering affects `c.req.json()`, and why validation sees an empty or consumed body. Show how to move parsing, clone the request, or centralize parsing so the handler still receives the payload.",
-            "slug": "hono-rejects-json-validation-because-middleware-reads-c-req-json-first",
-            "draftedAt": "2026-11-25T04:43:34.032Z"
+            "angle": "Open with the iOS startup error and the stage where it breaks, such as `pod install` output or an Xcode launch crash. Explain the mechanism behind native module registration, Hermes, and pod linkage, and why stale Pods or mismatched native settings prevent the app from starting. Show the exact cleanup and reinstall steps plus the files that need to match.",
+            "slug": "react-native-ios-fails-to-launch-when-the-new-architecture-pod-setup-is-out-of-sync",
+            "draftedAt": "2026-11-26T03:52:07.381Z"
         }
     ]
 }
