@@ -1,0 +1,321 @@
+---
+title: "Bun Returns the Wrong Header Values When a Node Fetch Library Assumes Undici Semantics"
+description: "A fetch wrapper or HTTP client behaves incorrectly because it expects Node runtime details that Bun does not mirror exactly."
+tags: ["bun", "fetch", "http", "compatibility"]
+date: Nov 27, 2026
+cell: "bun-fetch-undici-headers::bun::node-fetch-compat-limit"
+---
+
+`Response.headers.get('set-cookie')` returns `null` in Bun, and libraries built against Node `undici` semantics may fail with `TypeError: Cannot read properties of null (reading 'split')` or `Headers.append: "set-cookie" is an invalid header name/value` depending on how they try to consume the response.
+
+## What breaks
+
+A fetch wrapper written for Node often assumes two things about response headers:
+
+1. `set-cookie` can be read back as a single combined string.
+2. header objects behave like Node `undici` internals, including mutable, case-preserving, or array-based cookie access.
+
+In Bun, those assumptions can produce wrong results instead of an immediate crash.
+
+A common symptom is code like this:
+
+```ts
+const cookieHeader = response.headers.get('set-cookie');
+const cookies = cookieHeader.split(','); // TypeError if null
+```
+
+Another common failure is code that expects `response.headers.raw()` or `response.headers.getSetCookie()` to exist because the client was written against `undici` or a library that wraps it. In Bun, `Headers` follows the Fetch standard more closely, and those Node-specific helpers are not guaranteed.
+
+The result is usually one of these behaviors:
+
+- `set-cookie` is missing when read through `Headers.get()`
+- header names appear in lowercase only
+- a wrapper throws because it expects `undici`-only methods
+- multiple cookie values collapse into a form the wrapper does not expect
+
+## Why this happens
+
+Bun implements the Fetch standard first. Node-oriented HTTP clients often assume `undici`, because `undici` is Node’s modern fetch implementation and many libraries now target its behavior directly.
+
+The key difference is not whether headers exist. The difference is how header lists are represented and which convenience methods a library expects.
+
+In the Fetch standard, `Headers` is a normalized key-value collection. Header names are case-insensitive, and values are exposed through standard methods like `get()`, `has()`, and iteration. There is no standard `raw()` method. There is also no standard way to retrieve `Set-Cookie` through a single combined header string, because `Set-Cookie` is a special multi-header field that is not safely comma-joinable.
+
+In Node with `undici`, a library may rely on implementation details such as:
+
+- `response.headers.getSetCookie()`
+- `response.headers.raw()`
+- access to the underlying internal header list
+- a mutable `Headers` object attached to the runtime response
+
+That dependency is fragile. It works only if the runtime mirrors the exact `undici` contract that the library expects.
+
+Bun does not promise those internal `undici` details. It promises standards-based Fetch behavior, which means a package that reaches behind the standard API can break even when the HTTP exchange itself is correct.
+
+## The header case problem
+
+The simplest visible mismatch is header casing. Code sometimes checks for `Content-Type` or `Set-Cookie` with exact casing and then fails when the runtime lowercases names.
+
+This is incorrect in any Fetch implementation, not just Bun. Header names are case-insensitive. You should always access them with the canonical lowercase string or compare case-insensitively.
+
+```ts
+const contentType = response.headers.get('content-type');
+const etag = response.headers.get('etag');
+```
+
+Do not write code that expects the original header casing to be preserved in lookup behavior.
+
+If a library is doing string comparison against serialized header output, adapt it to use `Headers` methods instead of parsing raw header text.
+
+## The `Set-Cookie` problem
+
+`Set-Cookie` is the most common source of wrong results.
+
+A response can contain multiple `Set-Cookie` headers. The Fetch standard intentionally does not expose them as a simple comma-separated string through `Headers.get('set-cookie')`, because comma-joining cookie strings is unsafe. A cookie value can contain commas in attributes such as `Expires`.
+
+That means this is unreliable:
+
+```ts
+const setCookie = response.headers.get('set-cookie');
+```
+
+In Bun, the above can return `null` or otherwise not match `undici`-centric expectations in wrapper code.
+
+If you need the cookies, use an API that returns them as separate values. The exact method depends on the runtime and library layer. A Bun-compatible approach is to avoid depending on response header internals and instead use a cookie-aware client or parse the `Set-Cookie` headers from a runtime-supported accessor when available.
+
+For example, a wrapper can normalize access with a helper:
+
+```ts
+function getSetCookies(headers: Headers): string[] {
+  const values: string[] = [];
+
+  // Standard Fetch iteration, if the runtime exposes multiple values.
+  for (const [name, value] of headers) {
+    if (name.toLowerCase() === 'set-cookie') {
+      values.push(value);
+    }
+  }
+
+  return values;
+}
+```
+
+This works only if the runtime exposes each `Set-Cookie` value through iteration. If the runtime merges or hides them, the wrapper must stop relying on `Headers` alone and use the response object’s runtime-specific cookie access, or switch libraries.
+
+## What `undici`-centric libraries expect
+
+Many Node libraries built around HTTP and auth flows assume the `undici` response shape because it is the modern default in Node environments.
+
+Examples of package families that can show this issue include:
+
+- wrapper clients around `fetch`
+- OAuth libraries that parse `Set-Cookie`
+- session helpers that forward cookies between requests
+- testing utilities that serialize header lists from `undici`
+
+The failure mode is usually not an import-time error. The package loads successfully, then returns the wrong result at runtime. Common examples:
+
+- `headers.get('set-cookie')` returns `null`
+- a helper calling `headers.getSetCookie()` throws `TypeError`
+- a library expects a header list object with `.raw()` and receives a standard `Headers`
+- auth state is lost because cookies are not forwarded
+
+This matters because the transport succeeded. The bug is in the client’s header assumptions.
+
+## A minimal reproduction
+
+The following code shows the shape of the problem. It assumes the consumer wants all cookies from a response, but uses a Node-centric API contract:
+
+```ts
+async function readCookies(url: string) {
+  const response = await fetch(url);
+
+  // Node-centric assumption.
+  const cookies = (response.headers as any).getSetCookie?.();
+
+  if (!cookies) {
+    throw new Error('No cookies returned');
+  }
+
+  return cookies;
+}
+```
+
+In a Bun environment, this can fail because `getSetCookie` is not part of the Fetch standard. If the library falls back to `get('set-cookie')`, the code can fail a different way:
+
+```ts
+async function readCookies(url: string) {
+  const response = await fetch(url);
+  const cookieHeader = response.headers.get('set-cookie');
+
+  if (!cookieHeader) {
+    return [];
+  }
+
+  return cookieHeader.split(','); // unsafe for Set-Cookie
+}
+```
+
+The split is wrong even when the header exists.
+
+## How to adapt the client
+
+The cleanest fix is to remove the dependency on `undici`-specific header behavior.
+
+### 1. Use standard `Headers` access for normal headers
+
+For ordinary response metadata, use Fetch methods only.
+
+```ts
+async function fetchJson(url: string) {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const contentType = response.headers.get('content-type');
+  if (!contentType?.includes('application/json')) {
+    throw new TypeError(`Unexpected content-type: ${contentType}`);
+  }
+
+  return response.json();
+}
+```
+
+This is safe across Bun, browsers, and Node Fetch implementations.
+
+### 2. Treat cookies as a special case
+
+If the library needs cookie persistence, use a cookie jar or a package that understands the runtime you are using.
+
+For Bun, a safer approach is to use a cookie-aware client package rather than manually scraping `Set-Cookie` from `Headers`.
+
+A common choice is `tough-cookie` plus a client integration layer, or a Bun-compatible HTTP client that explicitly supports Bun’s Fetch behavior. If you need a direct fetch wrapper, store and forward cookies yourself with a dedicated parser, not with `split(',')`.
+
+Example using a simple cookie jar pattern:
+
+```ts
+import { CookieJar } from 'tough-cookie';
+
+const jar = new CookieJar();
+
+async function fetchWithCookies(url: string) {
+  const cookieHeader = await jar.getCookieString(url);
+
+  const response = await fetch(url, {
+    headers: cookieHeader ? { cookie: cookieHeader } : {},
+  });
+
+  const setCookies = response.headers.get('set-cookie');
+  if (setCookies) {
+    // Do not parse this with comma splitting.
+    await jar.setCookie(setCookies, url);
+  }
+
+  return response;
+}
+```
+
+This is only correct if the runtime exposes a usable `Set-Cookie` value. If it does not, use a client that exposes individual cookie values or a runtime-supported cookie API.
+
+### 3. Replace `undici`-dependent helpers
+
+If a library calls `headers.raw()` or `headers.getSetCookie()`, replace that code path with standard Fetch behavior or a different package.
+
+For example, instead of depending on response internals:
+
+```ts
+function getHeader(headers: Headers, name: string): string | null {
+  return headers.get(name);
+}
+```
+
+For cookies, define a separate adapter interface:
+
+```ts
+interface CookieSource {
+  getCookies(): string[];
+}
+
+function cookiesFromHeaders(headers: Headers): CookieSource {
+  return {
+    getCookies() {
+      const out: string[] = [];
+      for (const [name, value] of headers) {
+        if (name.toLowerCase() === 'set-cookie') out.push(value);
+      }
+      return out;
+    },
+  };
+}
+```
+
+That keeps the incompatibility isolated to one place.
+
+## Choosing a Bun-compatible package
+
+If a package depends on Node’s `undici` response details, prefer one of these options:
+
+- a package that documents Bun support explicitly
+- a pure Fetch-based wrapper
+- a package that does not touch raw headers or `undici` internals
+- a cookie library that accepts explicit header arrays or individual cookie strings
+
+Avoid clients that require:
+
+- `response.headers.raw()`
+- `response.headers.getSetCookie()`
+- access to `undici` response internals
+- Node-only `http` request/response objects when you are already on Fetch
+
+If a package lists `undici` as a hard runtime dependency, inspect its header handling before adopting it in Bun.
+
+## Verifying the behavior
+
+You can confirm the mismatch with a small test server that returns multiple cookies.
+
+```ts
+import { createServer } from 'node:http';
+
+const server = createServer((req, res) => {
+  res.setHeader('Set-Cookie', [
+    'session=abc; Path=/; HttpOnly',
+    'theme=dark; Path=/; SameSite=Lax',
+  ]);
+  res.setHeader('Content-Type', 'text/plain');
+  res.end('ok');
+});
+
+server.listen(3000, async () => {
+  const response = await fetch('http://localhost:3000');
+
+  console.log(response.headers.get('content-type'));
+  console.log(response.headers.get('set-cookie'));
+
+  server.close();
+});
+```
+
+The important point is not the exact console output. The important point is that `Set-Cookie` should not be treated like a normal comma-joinable header. If a client depends on that assumption, it will behave differently across runtimes.
+
+## Safe assumptions and unsafe assumptions
+
+Safe assumptions:
+
+- `fetch()` returns a standards-based `Response`
+- `headers.get('content-type')` works for ordinary headers
+- header names are case-insensitive
+- `response.ok`, `response.status`, and `response.json()` behave like Fetch
+
+Unsafe assumptions:
+
+- `headers.raw()` exists
+- `headers.getSetCookie()` exists
+- `Set-Cookie` can be read as a single comma-separated string
+- header object internals match `undici`
+- a Node library that uses Fetch is automatically Bun-compatible
+
+## Practical takeaway
+
+Prefer the standards-based path first: read ordinary headers through `Headers.get()`, keep cookie handling separate, and avoid libraries that depend on `undici` internals. If the package requires `raw()` or `getSetCookie()`, replace it with a Bun-compatible client or add a dedicated cookie adapter. That avoids the wrong-result class of bugs where the request succeeds but the response headers are interpreted incorrectly.
