@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-23T00:31:20.229Z",
     "ideas": [
         {
-            "cell": "bun-fetch-undici-headers::bun::node-fetch-compat-limit",
-            "title": "Bun Returns the Wrong Header Values When a Node Fetch Library Assumes Undici Semantics",
-            "description": "A fetch wrapper or HTTP client behaves incorrectly because it expects Node runtime details that Bun does not mirror exactly.",
-            "tags": [
-                "bun",
-                "fetch",
-                "http",
-                "compatibility"
-            ],
-            "angle": "Open with the concrete wrong-result symptom, such as missing headers, unexpected casing, or a thrown compatibility error. Explain where Bun follows the Fetch standard and where Node-centric libraries depend on `undici`-specific behavior, then show how to adapt the client or choose a Bun-compatible package. The takeaway should be which API assumptions are safe and which need replacement.",
-            "slug": "bun-returns-the-wrong-header-values-when-a-node-fetch-library-assumes-undici-semantics"
-        },
-        {
             "cell": "docker-port-exposed-but-unreachable::docker::published-port-host-binding",
             "title": "Docker Shows a Published Port but the Service Is Still Unreachable on the Host",
             "description": "`docker run -p` exposes a port, yet the service still refuses connections because the app is bound to the wrong interface or port.",
@@ -69,18 +56,18 @@
     ],
     "drafted": [
         {
-            "cell": "react-native-ios-hermes-startup::react-native::ios-pod-install-runtime-crash",
-            "title": "React Native iOS Fails to Launch When the New Architecture Pod Setup Is Out of Sync",
-            "description": "The iOS app builds but crashes or stops launching when CocoaPods and React Native native modules are not aligned.",
+            "cell": "bun-fetch-undici-headers::bun::node-fetch-compat-limit",
+            "title": "Bun Returns the Wrong Header Values When a Node Fetch Library Assumes Undici Semantics",
+            "description": "A fetch wrapper or HTTP client behaves incorrectly because it expects Node runtime details that Bun does not mirror exactly.",
             "tags": [
-                "react-native",
-                "ios",
-                "cocoapods",
-                "hermes"
+                "bun",
+                "fetch",
+                "http",
+                "compatibility"
             ],
-            "angle": "Open with the iOS startup error and the stage where it breaks, such as `pod install` output or an Xcode launch crash. Explain the mechanism behind native module registration, Hermes, and pod linkage, and why stale Pods or mismatched native settings prevent the app from starting. Show the exact cleanup and reinstall steps plus the files that need to match.",
-            "slug": "react-native-ios-fails-to-launch-when-the-new-architecture-pod-setup-is-out-of-sync",
-            "draftedAt": "2026-11-26T03:52:07.381Z"
+            "angle": "Open with the concrete wrong-result symptom, such as missing headers, unexpected casing, or a thrown compatibility error. Explain where Bun follows the Fetch standard and where Node-centric libraries depend on `undici`-specific behavior, then show how to adapt the client or choose a Bun-compatible package. The takeaway should be which API assumptions are safe and which need replacement.",
+            "slug": "bun-returns-the-wrong-header-values-when-a-node-fetch-library-assumes-undici-semantics",
+            "draftedAt": "2026-11-27T03:53:24.542Z"
         }
     ]
 }
