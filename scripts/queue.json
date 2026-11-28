@@ -2,19 +2,6 @@
     "generatedAt": "2026-11-23T00:31:20.229Z",
     "ideas": [
         {
-            "cell": "docker-port-exposed-but-unreachable::docker::published-port-host-binding",
-            "title": "Docker Shows a Published Port but the Service Is Still Unreachable on the Host",
-            "description": "`docker run -p` exposes a port, yet the service still refuses connections because the app is bound to the wrong interface or port.",
-            "tags": [
-                "docker",
-                "networking",
-                "ports",
-                "containers"
-            ],
-            "angle": "Start with the refused-connection symptom and the exact host and container ports. Explain container networking, the difference between `127.0.0.1` and `0.0.0.0` inside the container, and why publishing a port does not help if the process only listens on loopback or another port. Show the bind setting, the `-p` mapping, and how to verify listening sockets inside the container.",
-            "slug": "docker-shows-a-published-port-but-the-service-is-still-unreachable-on-the-host"
-        },
-        {
             "cell": "s3-cors-object-access::aws-s3::browser-get-object-denied",
             "title": "AWS S3 Blocks Browser Downloads with CORS When the Bucket Policy Allows Access but the CORS Rule Does Not",
             "description": "The object exists and permissions are valid, but the browser blocks the response because the bucket CORS rule is incomplete.",
@@ -56,18 +43,18 @@
     ],
     "drafted": [
         {
-            "cell": "bun-fetch-undici-headers::bun::node-fetch-compat-limit",
-            "title": "Bun Returns the Wrong Header Values When a Node Fetch Library Assumes Undici Semantics",
-            "description": "A fetch wrapper or HTTP client behaves incorrectly because it expects Node runtime details that Bun does not mirror exactly.",
+            "cell": "docker-port-exposed-but-unreachable::docker::published-port-host-binding",
+            "title": "Docker Shows a Published Port but the Service Is Still Unreachable on the Host",
+            "description": "`docker run -p` exposes a port, yet the service still refuses connections because the app is bound to the wrong interface or port.",
             "tags": [
-                "bun",
-                "fetch",
-                "http",
-                "compatibility"
+                "docker",
+                "networking",
+                "ports",
+                "containers"
             ],
-            "angle": "Open with the concrete wrong-result symptom, such as missing headers, unexpected casing, or a thrown compatibility error. Explain where Bun follows the Fetch standard and where Node-centric libraries depend on `undici`-specific behavior, then show how to adapt the client or choose a Bun-compatible package. The takeaway should be which API assumptions are safe and which need replacement.",
-            "slug": "bun-returns-the-wrong-header-values-when-a-node-fetch-library-assumes-undici-semantics",
-            "draftedAt": "2026-11-27T03:53:24.542Z"
+            "angle": "Start with the refused-connection symptom and the exact host and container ports. Explain container networking, the difference between `127.0.0.1` and `0.0.0.0` inside the container, and why publishing a port does not help if the process only listens on loopback or another port. Show the bind setting, the `-p` mapping, and how to verify listening sockets inside the container.",
+            "slug": "docker-shows-a-published-port-but-the-service-is-still-unreachable-on-the-host",
+            "draftedAt": "2026-11-28T03:39:49.905Z"
         }
     ]
 }
