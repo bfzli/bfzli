@@ -1,0 +1,303 @@
+---
+title: "Docker Shows a Published Port but the Service Is Still Unreachable on the Host"
+description: "`docker run -p` exposes a port, yet the service still refuses connections because the app is bound to the wrong interface or port."
+tags: ["docker", "networking", "ports", "containers"]
+date: Nov 28, 2026
+cell: "docker-port-exposed-but-unreachable::docker::published-port-host-binding"
+---
+
+`curl http://localhost:3000` on the host returns `curl: (7) Failed to connect to localhost port 3000 after 0 ms: Connection refused` even though `docker run -p 3000:3000` published the port, because the process inside the container is not listening on the interface or port that Docker forwards to.
+
+## What `-p` actually does
+
+`docker run -p 3000:3000` creates a port-forward from the host’s port `3000` to port `3000` inside the container. Docker sets up NAT rules and userland plumbing so traffic that reaches the host on `localhost:3000` can be delivered to the container network namespace.
+
+That forwarding only works if a process inside the container is actually accepting connections on the destination port. Publishing a port does not start the application, does not change the application’s bind address, and does not make an app listen on a port it was never configured to use.
+
+The container has its own network namespace. Inside it, `127.0.0.1` means “this container,” not the host. `0.0.0.0` means “all interfaces inside this container namespace.” That distinction is usually the cause.
+
+## Typical failure pattern
+
+A web app is started with `docker run -p 3000:3000 my-app`, but the app binds only to loopback inside the container:
+
+```ts
+import http from 'node:http';
+
+const port = Number(process.env.PORT ?? 3000);
+
+http.createServer((req, res) => {
+  res.end('ok');
+}).listen(port, '127.0.0.1');
+```
+
+This starts a server on `127.0.0.1:3000` inside the container. From the container’s point of view, that socket is reachable only from the same network namespace. Docker’s port-forwarding path targets the container’s external interface, not its loopback interface, so connections arriving through the published port do not match the listening socket.
+
+A different version of the same problem is a port mismatch:
+
+```ts
+import http from 'node:http';
+
+http.createServer((req, res) => {
+  res.end('ok');
+}).listen(8080, '0.0.0.0');
+```
+
+If this app listens on `8080` but the container was started with `-p 3000:3000`, Docker forwards to container port `3000`. Nothing is listening there, so the connection fails.
+
+## Why loopback inside the container blocks host access
+
+Inside each container, the network stack is isolated. That means the container owns its own `lo` interface and its own IP addresses on interfaces such as `eth0`.
+
+Binding to `127.0.0.1` tells the kernel to accept connections only on the loopback interface. That is fine for in-process or same-namespace clients. It is not fine for traffic that arrives from Docker’s bridge network or from a published port forward, because those packets are delivered to the container’s non-loopback interface.
+
+Binding to `0.0.0.0` tells the kernel to listen on all IPv4 addresses assigned to the container. That includes the bridge address Docker uses for the container. For IPv6, the analogous wildcard is `::`, depending on how the application and OS are configured.
+
+A published port is therefore necessary but not sufficient. Docker can route traffic to the container, but the application still has to bind to a reachable address and the expected port.
+
+## Verify the container is listening on the right socket
+
+Use `docker ps` to confirm the port mapping:
+
+```sh
+docker ps
+```
+
+The `PORTS` column should show something like this:
+
+```text
+0.0.0.0:3000->3000/tcp
+```
+
+That means host port `3000` is forwarded to container port `3000`. If the app listens on `8080`, the mapping must match that:
+
+```sh
+docker run --rm -p 3000:8080 my-app
+```
+
+Next, inspect sockets inside the container. `ss` is the most direct tool:
+
+```sh
+docker exec -it <container-id> ss -ltnp
+```
+
+A healthy result for a service intended for port `3000` looks like this:
+
+```text
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      511          0.0.0.0:3000      0.0.0.0:*    users:(("node",pid=1,fd=18))
+```
+
+If you see `127.0.0.1:3000`, the service is bound to loopback only:
+
+```text
+LISTEN 0      511        127.0.0.1:3000      0.0.0.0:*    users:(("node",pid=1,fd=18))
+```
+
+If you see a different port, the `-p` mapping and the application setting do not agree:
+
+```text
+LISTEN 0      511          0.0.0.0:8080      0.0.0.0:*    users:(("node",pid=1,fd=18))
+```
+
+You can also check from inside the container with `curl`, which removes Docker’s forwarding from the equation:
+
+```sh
+docker exec -it <container-id> sh -lc 'curl -v http://127.0.0.1:3000'
+```
+
+If that works, the process is running and accepting local connections. Then check whether it is bound to `0.0.0.0` and whether the host port mapping matches. If it fails inside the container, the application is not listening where expected.
+
+## Minimal reproduction
+
+A simple Node.js server makes the interface difference obvious.
+
+`server.js`:
+
+```js
+const http = require('node:http');
+
+const host = process.env.HOST ?? '127.0.0.1';
+const port = Number(process.env.PORT ?? 3000);
+
+http.createServer((req, res) => {
+  res.setHeader('Content-Type', 'text/plain');
+  res.end(`listening on ${host}:${port}\n`);
+}).listen(port, host, () => {
+  console.log(`server listening on ${host}:${port}`);
+});
+```
+
+`Dockerfile`:
+
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY server.js .
+CMD ["node", "server.js"]
+```
+
+Build it:
+
+```sh
+docker build -t loopback-demo .
+```
+
+Run it with a published port:
+
+```sh
+docker run --rm -p 3000:3000 loopback-demo
+```
+
+From the host, this fails:
+
+```sh
+curl -v http://localhost:3000
+```
+
+Expected symptom:
+
+```text
+*   Trying 127.0.0.1:3000...
+* connect to 127.0.0.1 port 3000 from 127.0.0.1 port 51542 failed: Connection refused
+curl: (7) Failed to connect to localhost port 3000 after 0 ms: Connection refused
+```
+
+The container is listening on `127.0.0.1:3000` inside its own namespace. Docker forwards traffic to the container, but the socket is not bound to the interface that receives forwarded traffic.
+
+Now run the same image with `HOST=0.0.0.0`:
+
+```sh
+docker run --rm -e HOST=0.0.0.0 -p 3000:3000 loopback-demo
+```
+
+Check the listening socket:
+
+```sh
+docker exec -it <container-id> ss -ltnp
+```
+
+Expected output:
+
+```text
+LISTEN 0      511          0.0.0.0:3000      0.0.0.0:*    users:(("node",pid=1,fd=18))
+```
+
+Now the host connection works:
+
+```sh
+curl http://localhost:3000
+```
+
+## Fix the bind address in the application
+
+The main fix is to make the application listen on `0.0.0.0` inside the container.
+
+For many frameworks, the default is loopback. That default is appropriate for local development on a host machine, but not for containerized services that need to be reached from outside the container.
+
+Examples:
+
+Express:
+
+```ts
+import express from 'express';
+
+const app = express();
+const port = Number(process.env.PORT ?? 3000);
+const host = process.env.HOST ?? '0.0.0.0';
+
+app.get('/', (_req, res) => {
+  res.send('ok');
+});
+
+app.listen(port, host, () => {
+  console.log(`listening on ${host}:${port}`);
+});
+```
+
+Fastify:
+
+```ts
+import Fastify from 'fastify';
+
+const fastify = Fastify();
+const port = Number(process.env.PORT ?? 3000);
+const host = process.env.HOST ?? '0.0.0.0';
+
+fastify.get('/', async () => 'ok');
+
+await fastify.listen({ port, host });
+```
+
+NestJS:
+
+```ts
+await app.listen(3000, '0.0.0.0');
+```
+
+The important part is not the framework API. It is the socket bind target. If the process binds to `127.0.0.1`, only local namespace clients can connect. If it binds to `0.0.0.0`, Docker’s forwarding path can reach it.
+
+## Match the container port to the published port
+
+`-p hostPort:containerPort` maps two distinct ports. Both sides matter.
+
+This works:
+
+```sh
+docker run --rm -p 3000:3000 my-app
+```
+
+This also works if the app listens on `8080`:
+
+```sh
+docker run --rm -p 3000:8080 my-app
+```
+
+But this does not work if the app listens on `8080` and the mapping forwards to `3000` inside the container:
+
+```sh
+docker run --rm -p 3000:3000 my-app
+```
+
+In that case, host connections arrive at container port `3000`, where nothing is listening.
+
+If the app’s internal port is configurable through `PORT`, set it explicitly:
+
+```sh
+docker run --rm -e PORT=3000 -p 3000:3000 my-app
+```
+
+If the app expects a fixed port such as `8080`, publish that exact port:
+
+```sh
+docker run --rm -p 3000:8080 my-app
+```
+
+## Confirm the issue with `docker inspect`
+
+`docker inspect` shows the published port configuration, but not whether the process is actually listening.
+
+Use it to verify the forward:
+
+```sh
+docker inspect <container-id> --format '{{json .NetworkSettings.Ports}}'
+```
+
+Example output:
+
+```json
+{"3000/tcp":[{"HostIp":"0.0.0.0","HostPort":"3000"}]}
+```
+
+If that exists and the host still gets `Connection refused`, the problem is inside the container. The remaining suspects are the bind address, the port number, or the process never started.
+
+## Prefer changing the bind address, not the host port hack
+
+A common workaround is to try different `-p` values on the host. That only helps when the app listens on a different container port than expected. It does not help when the app is bound to loopback inside the container.
+
+The preferred fix is to make the service bind to `0.0.0.0` and to keep the `-p` mapping aligned with the actual application port. That makes the container reachable from the host, from Docker networks, and from any orchestration layer that expects container services to listen on non-loopback interfaces.
+
+If the application must remain bound to `127.0.0.1` for a specific reason, then it is not a candidate for direct host publication through `-p`. In that case, a sidecar proxy or a different network design is required.
+
+## Practical takeaway
+
+Use `0.0.0.0` inside the container for services that should be reachable through `docker run -p`, and make sure the published container port matches the port the process actually listens on. Verify with `ss -ltnp` or `netstat -ltnp` inside the container. If the socket shows `127.0.0.1`, Docker can forward all day and the host will still get `Connection refused`.
